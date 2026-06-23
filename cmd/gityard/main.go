@@ -1,9 +1,7 @@
-// Command gityard is the GitYard server. Step 1 (skeleton) boots the inherited
-// Shoka core — userstore, oauthstore, the OAuth authorization server, the auth
-// middleware + authz gate, the /auth/* login surface, and the /ws/ui user/OAuth
-// management WebSocket — under a new binary, plus an MCP server. It proves that
-// Shoka's pkg/ submodule works as an external dependency. There is NO Git hosting,
-// NO PR system, and NO document store yet; those arrive in later steps.
+// Command gityard is the GitYard server. It boots the inherited Shoka core —
+// userstore, oauthstore, the OAuth AS, auth middleware + authz gate, /auth/*,
+// /ws/ui — and adds Git hosting via Smart HTTP (clone/fetch/push), bare repo
+// management, and MCP tools for project/repo administration.
 package main
 
 import (
@@ -21,6 +19,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/sopranoworks/gityard/internal/git"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/authapi"
 	"github.com/sopranoworks/shoka/pkg/oauth"
@@ -31,8 +30,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// version is GitYard's build version (the skeleton step).
-const version = "0.0.1-step1"
+const version = "0.0.2-step2"
 
 func main() {
 	showVersion := flag.Bool("version", false, "Print the GitYard version and exit without starting the server.")
@@ -176,6 +174,17 @@ func run(cfg *Config, logger *slog.Logger) error {
 		Logger:             logger,
 	})
 
+	// ---- Git bare repository store ----
+	gitStore := git.NewStore(cfg.Storage.BaseDir)
+
+	// ---- Smart HTTP handler (/git/<ns>/<proj>.git/...) ----
+	gitHTTP := git.NewSmartHTTPHandler(gitStore, logger)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, stderrOut string) {
+		logger.Info("post-receive",
+			"namespace", namespace, "project", project,
+			"principal", principal.Email, "stderr", stderrOut)
+	}
+
 	// ---- /ws/ui user/OAuth management (Shoka core handlers, GitYard ws wrapper) ----
 	core := &uiws.CoreHandlers{}
 	core.SetUserStore(userStore)
@@ -207,15 +216,38 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 	wsMgr := newWSManager(core, webAuth.OriginAllowed, logger)
 
-	// ---- MCP server (core subset: a single GitYard-owned info tool; no doc tools) ----
-	mcpServer := setupMCPServer(cfg, logger)
+	// ---- MCP server (Git management tools + server info) ----
+	mcpServer := setupMCPServer(cfg, gitStore, logger)
 
 	// ---- HTTP listeners ----
 	g, ctx := errgroup.WithContext(ctx)
 
-	// Web listener: /auth/*, /ws/ui, static (none yet). The whole mux is wrapped by
-	// authHandler.Middleware so the session principal is resolved for every route.
-	webHandler := setupWebHandler(webAuth, authHandler, wsMgr)
+	// Git auth: tokens are validated from the HTTP Basic Auth password field.
+	// When OAuth is enabled, use the OAuth ValidateToken closure. When OAuth is
+	// disabled but static-bearer auth is enabled, validate against the static
+	// tokens list. When auth is fully disabled, pass nil (all requests proceed).
+	var gitValidateToken func(string) (auth.Principal, auth.RejectReason, bool)
+	if authConfig.ValidateToken != nil {
+		gitValidateToken = authConfig.ValidateToken
+	} else if cfg.Server.Auth.Enabled && len(cfg.Server.Auth.Tokens) > 0 {
+		tokens := cfg.Server.Auth.Tokens
+		gitValidateToken = func(token string) (auth.Principal, auth.RejectReason, bool) {
+			for _, t := range tokens {
+				if t == token {
+					return auth.Principal{
+						Name:  cfg.Identity.User.Name,
+						Email: cfg.Identity.User.Email,
+						Scope: "*",
+					}, "", true
+				}
+			}
+			return auth.Principal{}, auth.ReasonInvalidToken, false
+		}
+	}
+
+	// Web listener: /auth/*, /ws/ui, /git/*, static (none yet). The whole mux is wrapped
+	// by authHandler.Middleware so the session principal is resolved for every route.
+	webHandler := setupWebHandler(webAuth, authHandler, wsMgr, gitHTTP, gitValidateToken)
 	g.Go(func() error {
 		return runServer(ctx, "web", cfg.Server.HTTP.Listen, webHandler, logger)
 	})
@@ -256,27 +288,30 @@ func run(cfg *Config, logger *slog.Logger) error {
 	return g.Wait()
 }
 
-// setupWebHandler builds the Web mux: the /auth/* login surface and the /ws/ui
-// management WebSocket. /ws/ui takes the ?token= query fallback (browsers cannot set
-// an Authorization header on a WS handshake) and additionally requires a login session
-// once a user exists (RequireSession passes through while the store is empty —
-// no-lockout). The whole mux is wrapped by authHandler.Middleware so the session
-// principal is attached to every request.
-func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, wsMgr http.Handler) http.Handler {
+// setupWebHandler builds the Web mux: the /auth/* login surface, the /ws/ui
+// management WebSocket, and the /git/ Smart HTTP handler. /ws/ui takes the ?token=
+// query fallback (browsers cannot set an Authorization header on a WS handshake) and
+// additionally requires a login session once a user exists (RequireSession passes
+// through while the store is empty — no-lockout). The /git/ path uses HTTP Basic Auth
+// with the token in the password field (the standard git+PAT pattern). The whole mux
+// is wrapped by authHandler.Middleware so the session principal is attached to every
+// route (excluding /git/, which has its own auth layer).
+func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, wsMgr http.Handler, gitHTTP http.Handler, validateToken func(string) (auth.Principal, auth.RejectReason, bool)) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/ws/ui", webAuth.MiddlewareAllowQueryToken(authHandler.RequireSession(wsMgr)))
 	mux.Handle("/auth/", authHandler)
+	mux.Handle("/git/", git.BasicAuthMiddleware(validateToken)(gitHTTP))
 	return authHandler.Middleware(mux)
 }
 
-// setupMCPServer builds the MCP server. GitYard's document/Git tool surface does not
-// exist yet (step 1), so only a single GitYard-owned info tool is registered — enough
-// for an MCP client to connect and get a non-empty tools/list, proving the transport.
-func setupMCPServer(cfg *Config, logger *slog.Logger) *mcp.Server {
+// setupMCPServer builds the MCP server with GitYard's tool surface: server info,
+// project/repo management (create_project, list_projects).
+func setupMCPServer(cfg *Config, gitStore *git.Store, logger *slog.Logger) *mcp.Server {
 	mcpServer := mcp.NewServer(
 		&mcp.Implementation{Name: "gityard", Version: version},
 		&mcp.ServerOptions{Logger: logger},
 	)
+
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_server_info",
 		Description: "Get information about the GitYard server (name, version, public URL).",
@@ -287,6 +322,38 @@ func setupMCPServer(cfg *Config, logger *slog.Logger) *mcp.Server {
 			ExternalURL: cfg.Server.HTTP.ExternalURL,
 		}, nil
 	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "create_project",
+		Description: "Create a new bare Git repository under a namespace. Optionally clone from a seed URL.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, createProjectOutput, error) {
+		if in.CloneURL != "" {
+			if err := gitStore.CloneRepo(in.Namespace, in.ProjectName, in.CloneURL); err != nil {
+				return nil, createProjectOutput{}, fmt.Errorf("clone: %w", err)
+			}
+		} else {
+			if err := gitStore.CreateRepo(in.Namespace, in.ProjectName); err != nil {
+				return nil, createProjectOutput{}, fmt.Errorf("create: %w", err)
+			}
+		}
+		return nil, createProjectOutput{
+			Namespace: in.Namespace,
+			Project:   in.ProjectName,
+			Message:   "project created",
+		}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "list_projects",
+		Description: "List all projects (bare Git repositories), optionally scoped to a namespace.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in listProjectsInput) (*mcp.CallToolResult, listProjectsOutput, error) {
+		projects, err := gitStore.ListProjects(in.Namespace)
+		if err != nil {
+			return nil, listProjectsOutput{}, err
+		}
+		return nil, listProjectsOutput{Projects: projects}, nil
+	})
+
 	return mcpServer
 }
 
@@ -296,6 +363,26 @@ type serverInfoOutput struct {
 	Name        string `json:"name" jsonschema:"the server name"`
 	Version     string `json:"version" jsonschema:"the server version"`
 	ExternalURL string `json:"external_url,omitempty" jsonschema:"the configured public URL, if any"`
+}
+
+type createProjectInput struct {
+	Namespace   string `json:"namespace" jsonschema:"the namespace (defaults to 'default' if empty)"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name ([a-zA-Z0-9_-]+)"`
+	CloneURL    string `json:"clone_url,omitempty" jsonschema:"optional seed URL to clone from"`
+}
+
+type createProjectOutput struct {
+	Namespace string `json:"namespace"`
+	Project   string `json:"project"`
+	Message   string `json:"message"`
+}
+
+type listProjectsInput struct {
+	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace filter"`
+}
+
+type listProjectsOutput struct {
+	Projects []git.ProjectInfo `json:"projects"`
 }
 
 // oauthListenerHandler assembles the OAuth MCP listener: discovery documents and the
