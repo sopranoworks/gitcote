@@ -1,0 +1,9 @@
+# Compiled binary (built via `go build -o gityard ./cmd/gityard`)
+/gityard
+
+# Go test binaries
+*.test
+
+# Local runtime config and data
+/gityard.yaml
+/data/

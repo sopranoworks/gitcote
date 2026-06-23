@@ -1,0 +1,60 @@
+# GitYard example configuration (step 1 — skeleton server).
+#
+# Copy to gityard.yaml (or pass via --config) and adjust:
+#     ./gityard --config gityard.example.yaml
+#
+# REQUIRED: server.http.listen, storage.base_dir, and at least one MCP transport
+# (server.mcp.plain.listen or server.mcp.oauth.listen). Everything else is optional.
+#
+# GitYard terminates NO TLS by design — put every port behind a TLS-terminating
+# reverse proxy.
+
+server:
+  # Human-facing surfaces: the /auth/* login API and the /ws/ui user/OAuth
+  # management WebSocket. (No web frontend yet — backend only in step 1.)
+  http:
+    listen: ":8080"
+    external_url: "http://localhost:8080"   # optional; reported by get_server_info
+
+  # MCP endpoint (Streamable HTTP, served at /mcp). At least one transport must be set.
+  mcp:
+    # Plain transport — normal/internal use.
+    plain:
+      listen: ":8081"
+      external_url: "http://localhost:8081"
+      # bearer_auth off (default) = unauthenticated — loopback/internal use ONLY.
+      # bearer_auth on  = require Authorization: Bearer <token> from server.auth.tokens.
+      bearer_auth: false
+
+    # OAuth transport — external entry, purely OAuth. Setting oauth.listen ENABLES
+    # the OAuth authorization server (token enforcement on the MCP path). Omit the
+    # listen to run plain-only.
+    oauth:
+      # listen: ":8082"
+      # external_url: "https://your-public-origin"
+
+  # Web-route auth: the static-bearer policy + WebSocket origin allowlist, and the
+  # multi-user login store settings. This NEVER gates the MCP OAuth path.
+  auth:
+    enabled: false          # static-bearer for web routes; false = open
+    tokens: []
+    allowed_origins: []     # WebSocket origin allowlist; empty = allow all
+    users:
+      session_ttl: "720h"
+      allow_first_run_admin: true   # allow bootstrapping the first admin on an empty store
+      # totp_encryption_key: ""     # base64 32-byte key; generated + persisted if empty
+
+storage:
+  base_dir: "~/.gityard"
+
+# The single operator principal bound onto issued OAuth tokens.
+identity:
+  user:
+    name: "operator"
+    email: "operator@localhost"
+
+# OAuth token lifetimes (only consulted when the oauth transport is enabled).
+oauth:
+  access_token_ttl: "1h"
+  refresh_token_ttl: "720h"
+  authorization_code_ttl: "5m"
