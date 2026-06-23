@@ -179,10 +179,11 @@ func run(cfg *Config, logger *slog.Logger) error {
 
 	// ---- Smart HTTP handler (/git/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
 	gitHTTP := git.NewHandler(gitStore, logger)
-	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal) {
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
 		logger.Info("post-receive",
 			"namespace", namespace, "project", project,
-			"principal", principal.Email)
+			"principal", principal.Email, "push_options", pushOpts)
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts)
 	}
 
 	// ---- /ws/ui user/OAuth management (Shoka core handlers, GitYard ws wrapper) ----
@@ -345,7 +346,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, logger *slog.Logger) *mcp.
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_projects",
-		Description: "List all projects (bare Git repositories), optionally scoped to a namespace.",
+		Description: "List all projects (Git repositories), optionally scoped to a namespace.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in listProjectsInput) (*mcp.CallToolResult, listProjectsOutput, error) {
 		projects, err := gitStore.ListProjects(in.Namespace)
 		if err != nil {
@@ -353,6 +354,8 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, logger *slog.Logger) *mcp.
 		}
 		return nil, listProjectsOutput{Projects: projects}, nil
 	})
+
+	registerPRTools(mcpServer, gitStore)
 
 	return mcpServer
 }

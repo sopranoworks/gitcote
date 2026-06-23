@@ -26,7 +26,7 @@ func TestSmartHTTPRoundTrip(t *testing.T) {
 	var mu sync.Mutex
 	var postReceiveCalls int
 	handler := git.NewHandler(store, logger)
-	handler.PostReceive = func(ns, proj string, p auth.Principal) {
+	handler.PostReceive = func(ns, proj string, p auth.Principal, pushOpts []string) {
 		mu.Lock()
 		defer mu.Unlock()
 		postReceiveCalls++

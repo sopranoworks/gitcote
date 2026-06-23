@@ -1,0 +1,476 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gityard/internal/pr"
+	"github.com/sopranoworks/shoka/pkg/auth"
+)
+
+// prStoreCache caches open PR stores per project to avoid re-opening the bbolt db
+// on every push. The stores are opened lazily and kept open for the process lifetime.
+var (
+	prStores   = map[string]*pr.Store{}
+	prStoresMu sync.Mutex
+)
+
+func getPRStore(baseDir, namespace, project string) (*pr.Store, error) {
+	key := namespace + "/" + project
+	prStoresMu.Lock()
+	defer prStoresMu.Unlock()
+	if s, ok := prStores[key]; ok {
+		return s, nil
+	}
+	projPath := filepath.Join(baseDir, namespace, project)
+	s, err := pr.Open(filepath.Join(projPath, "prs.db"))
+	if err != nil {
+		return nil, err
+	}
+	prStores[key] = s
+	return s, nil
+}
+
+// handlePostReceive processes push options after a successful receive-pack.
+// If "pull_request.create" is present, creates or updates a PR.
+func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project string, principal auth.Principal, pushOpts []string) {
+	opts := parsePushOpts(pushOpts)
+	createPR := false
+	target := "main"
+	title := ""
+	var sourceBranch string
+
+	for k, v := range opts {
+		switch k {
+		case "pull_request.create":
+			createPR = true
+		case "pull_request.target":
+			if v != "" {
+				target = v
+			}
+		case "pull_request.title":
+			title = v
+		}
+	}
+
+	if !createPR {
+		// Even without create, check if any existing PRs need approval invalidation
+		// (source branch was updated).
+		invalidateApprovalsForPush(store, logger, namespace, project)
+		return
+	}
+
+	// Determine the source branch from repo refs.
+	repo, err := store.OpenRepo(namespace, project)
+	if err != nil {
+		logger.Error("open repo for PR creation", "error", err)
+		return
+	}
+	branches, err := git.ListBranches(repo)
+	if err != nil {
+		logger.Error("list branches for PR creation", "error", err)
+		return
+	}
+	for _, b := range branches {
+		if b != target && sourceBranch == "" {
+			sourceBranch = b
+		}
+	}
+
+	if sourceBranch == "" {
+		logger.Warn("no source branch found for PR creation")
+		return
+	}
+
+	if title == "" {
+		title = sourceBranch
+	}
+
+	author := principal.Email
+	if author == "" {
+		author = principal.Name
+	}
+	if author == "" {
+		author = "anonymous"
+	}
+
+	prStore, err := getPRStore(store.BaseDir(), namespace, project)
+	if err != nil {
+		logger.Error("open PR store", "error", err)
+		return
+	}
+
+	sourceHash, err := git.ResolveBranch(repo, sourceBranch)
+	if err != nil {
+		logger.Error("resolve source branch", "error", err)
+		return
+	}
+	targetHash, err := git.ResolveBranch(repo, target)
+	if err != nil {
+		logger.Error("resolve target branch", "error", err)
+		return
+	}
+
+	// Check for existing open PR on same source→target.
+	existing, _ := prStore.FindByBranches(sourceBranch, target)
+	if existing != nil {
+		// Update the existing PR: new source commit, recompute mergeable.
+		existing.SourceCommit = sourceHash.String()
+		existing.UpdatedAt = time.Now()
+		// Invalidate approval if source changed.
+		if existing.State == pr.StateApproved {
+			existing.State = pr.StateOpen
+			existing.ApprovedBy = ""
+			existing.ApprovedAt = nil
+		}
+		existing.Mergeable = computeMergeableForRepo(store, namespace, project, existing.SourceBranch, existing.TargetBranch)
+		if err := prStore.Update(existing); err != nil {
+			logger.Error("update existing PR", "error", err)
+		}
+		logger.Info("pr updated", "number", existing.Number, "source", sourceBranch, "target", target)
+		return
+	}
+
+	// Create new PR.
+	mergeable := computeMergeableForRepo(store, namespace, project, sourceBranch, target)
+	now := time.Now()
+	newPR := &pr.PullRequest{
+		RepoNamespace: namespace,
+		RepoProject:   project,
+		Title:         title,
+		SourceBranch:  sourceBranch,
+		TargetBranch:  target,
+		Author:        author,
+		State:         pr.StateOpen,
+		Mergeable:     mergeable,
+		SourceCommit:  sourceHash.String(),
+		TargetCommit:  targetHash.String(),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	num, err := prStore.Create(newPR)
+	if err != nil {
+		logger.Error("create PR", "error", err)
+		return
+	}
+	logger.Info("pr created", "number", num, "source", sourceBranch, "target", target, "mergeable", mergeable)
+}
+
+func invalidateApprovalsForPush(store *git.Store, logger *slog.Logger, namespace, project string) {
+	prStore, err := getPRStore(store.BaseDir(), namespace, project)
+	if err != nil {
+		return
+	}
+	repo, err := store.OpenRepo(namespace, project)
+	if err != nil {
+		return
+	}
+
+	prs, _ := prStore.List("")
+	for i := range prs {
+		p := &prs[i]
+		if p.State != pr.StateOpen && p.State != pr.StateApproved {
+			continue
+		}
+		// Check if source or target commit changed.
+		currentSource, _ := git.ResolveBranch(repo, p.SourceBranch)
+		currentTarget, _ := git.ResolveBranch(repo, p.TargetBranch)
+		changed := false
+		if currentSource.String() != p.SourceCommit {
+			p.SourceCommit = currentSource.String()
+			changed = true
+			if p.State == pr.StateApproved {
+				p.State = pr.StateOpen
+				p.ApprovedBy = ""
+				p.ApprovedAt = nil
+			}
+		}
+		if currentTarget.String() != p.TargetCommit {
+			p.TargetCommit = currentTarget.String()
+			changed = true
+			p.Mergeable = pr.MergeableUnknown
+		}
+		if changed {
+			p.Mergeable = computeMergeableForRepo(store, namespace, project, p.SourceBranch, p.TargetBranch)
+			p.UpdatedAt = time.Now()
+			_ = prStore.Update(p)
+		}
+	}
+}
+
+func computeMergeableForRepo(store *git.Store, namespace, project, sourceBranch, targetBranch string) pr.Mergeable {
+	repo, err := store.OpenRepo(namespace, project)
+	if err != nil {
+		return pr.MergeableUnknown
+	}
+	sourceHash, err := git.ResolveBranch(repo, sourceBranch)
+	if err != nil {
+		return pr.MergeableUnknown
+	}
+	targetHash, err := git.ResolveBranch(repo, targetBranch)
+	if err != nil {
+		return pr.MergeableUnknown
+	}
+	result, err := git.CheckConflicts(repo, sourceHash, targetHash)
+	if err != nil {
+		return pr.MergeableUnknown
+	}
+	if result.HasConflict {
+		return pr.MergeableConflict
+	}
+	return pr.MergeableClean
+}
+
+// parsePushOpts converts a []string of "key=value" or bare "key" into a map.
+func parsePushOpts(opts []string) map[string]string {
+	m := make(map[string]string, len(opts))
+	for _, o := range opts {
+		if i := strings.IndexByte(o, '='); i >= 0 {
+			m[o[:i]] = o[i+1:]
+		} else {
+			m[o] = ""
+		}
+	}
+	return m
+}
+
+// registerPRTools registers the PR MCP tools.
+func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store) {
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "list_pull_requests",
+		Description: "List pull requests for a repository, optionally filtered by state (open/approved/merged/closed).",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in listPRsInput) (*mcp.CallToolResult, listPRsOutput, error) {
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, listPRsOutput{}, err
+		}
+		prs, err := prStore.List(pr.PRState(in.State))
+		if err != nil {
+			return nil, listPRsOutput{}, err
+		}
+		return nil, listPRsOutput{PullRequests: prs}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "get_pull_request",
+		Description: "Get a single pull request by number.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, *pr.PullRequest, error) {
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, nil, err
+		}
+		p, err := prStore.Get(in.Number)
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, p, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "approve_pull_request",
+		Description: "Approve an open pull request. Fails if the PR has conflicts or is not in 'open' state.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in approvePRInput) (*mcp.CallToolResult, approvePROutput, error) {
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, approvePROutput{}, err
+		}
+		p, err := prStore.Get(in.Number)
+		if err != nil {
+			return nil, approvePROutput{}, err
+		}
+		if p.State != pr.StateOpen {
+			return nil, approvePROutput{}, fmt.Errorf("PR #%d is in state %q, not open", in.Number, p.State)
+		}
+		if p.Mergeable == pr.MergeableConflict {
+			return nil, approvePROutput{}, fmt.Errorf("PR #%d has merge conflicts", in.Number)
+		}
+
+		principal, _ := auth.PrincipalFrom(ctx)
+		approver := principal.Email
+		if approver == "" {
+			approver = principal.Name
+		}
+		if approver == "" {
+			approver = "anonymous"
+		}
+
+		now := time.Now()
+		p.State = pr.StateApproved
+		p.ApprovedBy = approver
+		p.ApprovedAt = &now
+		p.UpdatedAt = now
+		if err := prStore.Update(p); err != nil {
+			return nil, approvePROutput{}, err
+		}
+		return nil, approvePROutput{Number: p.Number, State: string(p.State), ApprovedBy: approver}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "merge_pull_request",
+		Description: "Merge an approved pull request. Fails if not approved or has conflicts.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in mergePRInput) (*mcp.CallToolResult, mergePROutput, error) {
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, mergePROutput{}, err
+		}
+		p, err := prStore.Get(in.Number)
+		if err != nil {
+			return nil, mergePROutput{}, err
+		}
+		if p.State != pr.StateApproved {
+			return nil, mergePROutput{}, fmt.Errorf("PR #%d is in state %q, not approved", in.Number, p.State)
+		}
+		if p.Mergeable != pr.MergeableClean {
+			return nil, mergePROutput{}, fmt.Errorf("PR #%d is not cleanly mergeable (status: %s)", in.Number, p.Mergeable)
+		}
+
+		repo, err := gitStore.OpenRepo(in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, mergePROutput{}, fmt.Errorf("open repo: %w", err)
+		}
+
+		sourceHash, err := git.ResolveBranch(repo, p.SourceBranch)
+		if err != nil {
+			return nil, mergePROutput{}, fmt.Errorf("resolve source: %w", err)
+		}
+		targetHash, err := git.ResolveBranch(repo, p.TargetBranch)
+		if err != nil {
+			return nil, mergePROutput{}, fmt.Errorf("resolve target: %w", err)
+		}
+
+		// Verify target hasn't moved since last check.
+		if targetHash.String() != p.TargetCommit {
+			return nil, mergePROutput{}, fmt.Errorf("target branch %q has been updated since last check; recompute mergeable", p.TargetBranch)
+		}
+
+		msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
+		mergeHash, err := git.MergeCommit(repo, sourceHash, targetHash, msg, "GitYard", "gityard@localhost")
+		if err != nil {
+			return nil, mergePROutput{}, fmt.Errorf("create merge commit: %w", err)
+		}
+
+		if err := git.UpdateBranchRef(repo, p.TargetBranch, mergeHash, targetHash); err != nil {
+			return nil, mergePROutput{}, fmt.Errorf("update target ref: %w", err)
+		}
+
+		now := time.Now()
+		p.State = pr.StateMerged
+		p.MergeCommit = mergeHash.String()
+		p.MergedAt = &now
+		p.UpdatedAt = now
+		if err := prStore.Update(p); err != nil {
+			return nil, mergePROutput{}, err
+		}
+
+		// Invalidate mergeable status on other PRs targeting the same branch.
+		invalidateApprovalsForPush(gitStore, slog.Default(), in.Namespace, in.ProjectName)
+
+		return nil, mergePROutput{Number: p.Number, State: string(p.State), MergeCommit: mergeHash.String()}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "get_pull_request_diff",
+		Description: "Get the unified diff for a pull request (source vs target).",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, prDiffOutput, error) {
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, prDiffOutput{}, err
+		}
+		p, err := prStore.Get(in.Number)
+		if err != nil {
+			return nil, prDiffOutput{}, err
+		}
+
+		repo, err := gitStore.OpenRepo(in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, prDiffOutput{}, err
+		}
+
+		diff, files, err := git.PRDiff(repo, p.SourceBranch, p.TargetBranch)
+		if err != nil {
+			return nil, prDiffOutput{}, err
+		}
+		return nil, prDiffOutput{Diff: diff, Files: files}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "get_pull_request_files",
+		Description: "List the changed files in a pull request.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, prFilesOutput, error) {
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, prFilesOutput{}, err
+		}
+		p, err := prStore.Get(in.Number)
+		if err != nil {
+			return nil, prFilesOutput{}, err
+		}
+
+		repo, err := gitStore.OpenRepo(in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, prFilesOutput{}, err
+		}
+
+		_, files, err := git.PRDiff(repo, p.SourceBranch, p.TargetBranch)
+		if err != nil {
+			return nil, prFilesOutput{}, err
+		}
+		return nil, prFilesOutput{Files: files}, nil
+	})
+}
+
+type listPRsInput struct {
+	Namespace   string `json:"namespace" jsonschema:"the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+	State       string `json:"state,omitempty" jsonschema:"filter by state (open/approved/merged/closed); empty=all"`
+}
+
+type listPRsOutput struct {
+	PullRequests []pr.PullRequest `json:"pull_requests"`
+}
+
+type getPRInput struct {
+	Namespace   string `json:"namespace" jsonschema:"the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+	Number      uint32 `json:"number" jsonschema:"required,the PR number"`
+}
+
+type approvePRInput struct {
+	Namespace   string `json:"namespace" jsonschema:"the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+	Number      uint32 `json:"number" jsonschema:"required,the PR number"`
+}
+
+type approvePROutput struct {
+	Number     uint32 `json:"number"`
+	State      string `json:"state"`
+	ApprovedBy string `json:"approved_by"`
+}
+
+type mergePRInput struct {
+	Namespace   string `json:"namespace" jsonschema:"the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+	Number      uint32 `json:"number" jsonschema:"required,the PR number"`
+}
+
+type mergePROutput struct {
+	Number      uint32 `json:"number"`
+	State       string `json:"state"`
+	MergeCommit string `json:"merge_commit"`
+}
+
+type prDiffOutput struct {
+	Diff  string         `json:"diff"`
+	Files []git.FileChange `json:"files"`
+}
+
+type prFilesOutput struct {
+	Files []git.FileChange `json:"files"`
+}

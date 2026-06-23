@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"log"
 	"log/slog"
 	"net/http"
@@ -27,11 +28,10 @@ type Handler struct {
 	backend *backend.Backend
 	logger  *slog.Logger
 
-	// PostReceive is called after a successful receive-pack (push). For step 2R
-	// it logs only; step 3 will process push options (which will require
-	// intercepting the protocol stream — deferred since v6's ReceivePack
-	// currently decodes push options internally without exposing them).
-	PostReceive func(namespace, project string, principal auth.Principal)
+	// PostReceive is called after a successful receive-pack (push). It receives
+	// the namespace, project, principal, and any push options extracted from the
+	// protocol stream (e.g. "pull_request.create", "pull_request.target=main").
+	PostReceive func(namespace, project string, principal auth.Principal, pushOpts []string)
 }
 
 // NewHandler returns a handler serving Git Smart HTTP for repos in store.
@@ -90,6 +90,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// For receive-pack POST, extract push options from the protocol stream
+	// before delegating to the backend (v6 decodes them internally but doesn't
+	// expose them). The body is buffered and re-wrapped so the backend can
+	// consume it.
+	var pushOpts []string
+	isReceivePack := len(parts) >= 3 && parts[2] == "git-receive-pack" && r.Method == http.MethodPost
+	if isReceivePack {
+		opts, newBody, err := ExtractPushOptions(r.Body)
+		if err != nil {
+			h.logger.Error("push option extraction failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		r.Body = newBody
+		pushOpts = opts
+	}
+
 	// Rewrite the URL path so the backend sees <namespace>/<project>.git/<rest>
 	// (without the /git/ prefix). The backend's regex-based router matches on this.
 	r2 := r.Clone(r.Context())
@@ -104,13 +121,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r2.Header = r2.Header.Clone()
 		r2.Header.Set("Authorization", "Bearer gityard-internal")
 	}
+	// Attach push options to the context for downstream access.
+	if len(pushOpts) > 0 {
+		r2 = r2.WithContext(context.WithValue(r2.Context(), pushOptionKey{}, pushOpts))
+	}
 
 	h.backend.ServeHTTP(w, r2)
 
 	// Post-receive hook: fire after a receive-pack POST completes.
-	if len(parts) >= 3 && parts[2] == "git-receive-pack" && r.Method == http.MethodPost && h.PostReceive != nil {
+	if isReceivePack && h.PostReceive != nil {
 		principal, _ := auth.PrincipalFrom(r.Context())
-		h.PostReceive(namespace, project, principal)
+		h.PostReceive(namespace, project, principal, pushOpts)
 	}
 }
 
