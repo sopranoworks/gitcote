@@ -1,0 +1,217 @@
+package git
+
+import (
+	"log"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"strings"
+
+	"github.com/go-git/go-billy/v6/osfs"
+	"github.com/go-git/go-git/v6/backend"
+	"github.com/go-git/go-git/v6/plumbing/cache"
+	"github.com/go-git/go-git/v6/plumbing/transport"
+	"github.com/go-git/go-git/v6/storage"
+	"github.com/go-git/go-git/v6/storage/filesystem"
+
+	"github.com/sopranoworks/shoka/pkg/auth"
+	"github.com/sopranoworks/shoka/pkg/authz"
+)
+
+// Handler serves Git Smart HTTP using go-git v6's backend.Backend. It handles
+// URL routing (/git/<namespace>/<project>.git/<rest>), authorization, and
+// delegates the Git protocol to go-git's pure Go implementation.
+type Handler struct {
+	store   *Store
+	backend *backend.Backend
+	logger  *slog.Logger
+
+	// PostReceive is called after a successful receive-pack (push). For step 2R
+	// it logs only; step 3 will process push options (which will require
+	// intercepting the protocol stream — deferred since v6's ReceivePack
+	// currently decodes push options internally without exposing them).
+	PostReceive func(namespace, project string, principal auth.Principal)
+}
+
+// NewHandler returns a handler serving Git Smart HTTP for repos in store.
+func NewHandler(store *Store, logger *slog.Logger) *Handler {
+	h := &Handler{
+		store:  store,
+		logger: logger,
+	}
+
+	loader := &storeLoader{store: store}
+	h.backend = &backend.Backend{
+		Loader:   loader,
+		ErrorLog: log.New(slogWriter{logger}, "", 0),
+	}
+
+	return h
+}
+
+// ServeHTTP routes /git/<namespace>/<project>.git/<rest>.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/git/")
+	if path == r.URL.Path {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Parse: <namespace>/<project>.git/<rest>
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) < 2 {
+		http.NotFound(w, r)
+		return
+	}
+	namespace := parts[0]
+	projectRaw := parts[1]
+
+	project := strings.TrimSuffix(projectRaw, ".git")
+	if project == projectRaw {
+		http.NotFound(w, r)
+		return
+	}
+
+	exists, err := h.store.RepoExists(namespace, project)
+	if err != nil {
+		h.logger.Error("repo check failed", "namespace", namespace, "project", project, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !exists {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Authorization: clone/fetch = LevelRead, push = LevelWrite.
+	level := h.requiredLevel(r, parts)
+	if !h.authorize(w, r, namespace, project, level) {
+		return
+	}
+
+	// Rewrite the URL path so the backend sees <namespace>/<project>.git/<rest>
+	// (without the /git/ prefix). The backend's regex-based router matches on this.
+	r2 := r.Clone(r.Context())
+	r2.URL = &url.URL{
+		Path:     "/" + path,
+		RawQuery: r.URL.RawQuery,
+	}
+	// The backend's requireReceivePackAuth checks for an Authorization header on
+	// receive-pack requests. GitYard handles auth at its own layer (above), so
+	// inject a sentinel header to satisfy the backend's check when it's absent.
+	if r2.Header.Get("Authorization") == "" {
+		r2.Header = r2.Header.Clone()
+		r2.Header.Set("Authorization", "Bearer gityard-internal")
+	}
+
+	h.backend.ServeHTTP(w, r2)
+
+	// Post-receive hook: fire after a receive-pack POST completes.
+	if len(parts) >= 3 && parts[2] == "git-receive-pack" && r.Method == http.MethodPost && h.PostReceive != nil {
+		principal, _ := auth.PrincipalFrom(r.Context())
+		h.PostReceive(namespace, project, principal)
+	}
+}
+
+func (h *Handler) requiredLevel(r *http.Request, parts []string) authz.Level {
+	if len(parts) < 3 {
+		return authz.LevelRead
+	}
+	rest := parts[2]
+	switch {
+	case rest == "git-receive-pack":
+		return authz.LevelWrite
+	case rest == "info/refs" && r.URL.Query().Get("service") == "git-receive-pack":
+		return authz.LevelWrite
+	default:
+		return authz.LevelRead
+	}
+}
+
+func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, namespace, project string, level authz.Level) bool {
+	principal, hasPrincipal := auth.PrincipalFrom(r.Context())
+	scope := "*"
+	if hasPrincipal {
+		scope = principal.Scope
+		if scope == "" {
+			scope = "*"
+		}
+	}
+
+	if err := authz.Authorize(scope, namespace, project, level); err != nil {
+		if !hasPrincipal {
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitYard"`)
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+		} else {
+			http.Error(w, "permission denied", http.StatusForbidden)
+		}
+		return false
+	}
+	return true
+}
+
+// storeLoader implements transport.Loader, mapping URL paths to go-git storage.
+type storeLoader struct {
+	store *Store
+}
+
+func (l *storeLoader) Load(u *url.URL) (storage.Storer, error) {
+	// URL path from the backend is /<namespace>/<project>.git (the regex captures
+	// everything before /info/refs, /git-upload-pack, etc.).
+	path := strings.TrimPrefix(u.Path, "/")
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) < 2 {
+		return nil, transport.ErrRepositoryNotFound
+	}
+
+	namespace := parts[0]
+	project := strings.TrimSuffix(parts[1], ".git")
+
+	gitDir, err := l.store.GitDir(namespace, project)
+	if err != nil {
+		return nil, transport.ErrRepositoryNotFound
+	}
+
+	fs := osfs.New(filepath.Clean(gitDir), osfs.WithBoundOS())
+	return filesystem.NewStorage(fs, cache.NewObjectLRUDefault()), nil
+}
+
+// BasicAuthMiddleware extracts a token from the HTTP Basic Auth password field
+// (username is ignored — the standard git+PAT pattern) and attaches the resolved
+// principal to the request context. When validateToken is nil (auth disabled),
+// all requests pass through. When set and no credentials are provided, returns 401.
+func BasicAuthMiddleware(validateToken func(string) (auth.Principal, auth.RejectReason, bool)) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if validateToken == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			_, password, ok := r.BasicAuth()
+			if !ok || password == "" {
+				w.Header().Set("WWW-Authenticate", `Basic realm="GitYard"`)
+				http.Error(w, "authentication required", http.StatusUnauthorized)
+				return
+			}
+			principal, _, valid := validateToken(password)
+			if !valid {
+				w.Header().Set("WWW-Authenticate", `Basic realm="GitYard"`)
+				http.Error(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
+			ctx := auth.WithPrincipal(r.Context(), principal)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// slogWriter adapts slog.Logger to io.Writer for the backend's ErrorLog.
+type slogWriter struct {
+	logger *slog.Logger
+}
+
+func (w slogWriter) Write(p []byte) (int, error) {
+	w.logger.Warn(strings.TrimSpace(string(p)), "source", "git-backend")
+	return len(p), nil
+}

@@ -1,17 +1,21 @@
-// Package git provides bare Git repository management and Smart HTTP transport
-// for GitYard. Repositories are bare repos stored under <base_dir>/<namespace>/<project>.
+// Package git provides Git repository management and Smart HTTP transport
+// for GitYard using go-git v6 (pure Go, no external binary).
+// Repositories use a non-bare layout (<base_dir>/<namespace>/<project>/.git/)
+// matching Shoka's storage conventions.
 package git
 
 import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	gogit "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 )
 
-// Store manages bare Git repositories under a base directory, mirroring Shoka's
+// Store manages Git repositories under a base directory using Shoka's
 // namespace/project filesystem layout.
 type Store struct {
 	baseDir string
@@ -22,11 +26,14 @@ func NewStore(baseDir string) *Store {
 	return &Store{baseDir: baseDir}
 }
 
+// BaseDir returns the store's base directory.
+func (s *Store) BaseDir() string { return s.baseDir }
+
 const DefaultNamespace = "default"
 
-// RepoPath returns the absolute path of a bare repository, validating the
-// namespace and project names. It does not require the repo to exist.
-func (s *Store) RepoPath(namespace, project string) (string, error) {
+// ProjectPath returns the absolute path of a project directory, validating
+// the namespace and project names. It does not require the project to exist.
+func (s *Store) ProjectPath(namespace, project string) (string, error) {
 	if namespace == "" {
 		namespace = DefaultNamespace
 	}
@@ -37,6 +44,15 @@ func (s *Store) RepoPath(namespace, project string) (string, error) {
 		return "", fmt.Errorf("invalid project name: %q", project)
 	}
 	return filepath.Join(s.baseDir, namespace, project), nil
+}
+
+// GitDir returns the .git directory path for a project.
+func (s *Store) GitDir(namespace, project string) (string, error) {
+	p, err := s.ProjectPath(namespace, project)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(p, ".git"), nil
 }
 
 // IsValidName checks if a name (namespace or project) contains only
@@ -53,78 +69,75 @@ func IsValidName(name string) bool {
 	return true
 }
 
-// CreateRepo initializes a new bare Git repository at <base>/<namespace>/<project>.
-// Returns an error if the repo already exists.
+// CreateRepo initializes a new Git repository at <base>/<namespace>/<project>
+// with a non-bare layout (.git/ subdirectory). HEAD defaults to refs/heads/main.
 func (s *Store) CreateRepo(namespace, project string) error {
-	repoPath, err := s.RepoPath(namespace, project)
+	projPath, err := s.ProjectPath(namespace, project)
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(repoPath, "HEAD")); err == nil {
+	gitDir := filepath.Join(projPath, ".git")
+	if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); err == nil {
 		return fmt.Errorf("repository %s/%s already exists", namespace, project)
 	}
-	if err := os.MkdirAll(repoPath, 0o755); err != nil {
-		return fmt.Errorf("create repo directory: %w", err)
+	if err := os.MkdirAll(projPath, 0o755); err != nil {
+		return fmt.Errorf("create project directory: %w", err)
 	}
-	cmd := exec.Command("git", "init", "--bare", repoPath)
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git init --bare: %w", err)
+
+	repo, err := gogit.PlainInit(projPath, false)
+	if err != nil {
+		return fmt.Errorf("git init: %w", err)
 	}
-	if err := configureRepo(repoPath); err != nil {
-		return err
-	}
-	// Set HEAD to main (the modern default, vs git's "master").
-	cmd = exec.Command("git", "-C", repoPath, "symbolic-ref", "HEAD", "refs/heads/main")
-	if err := cmd.Run(); err != nil {
+
+	// Set HEAD to refs/heads/main (the modern default).
+	if err := repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main"))); err != nil {
 		return fmt.Errorf("set HEAD to main: %w", err)
 	}
-	return nil
-}
 
-// configureRepo sets git config flags needed for Smart HTTP serving and
-// sets the default branch to "main".
-func configureRepo(repoPath string) error {
-	for _, kv := range [][2]string{
-		{"http.receivepack", "true"},
-		{"http.uploadpack", "true"},
-		{"receive.advertisePushOptions", "true"},
-	} {
-		cmd := exec.Command("git", "-C", repoPath, "config", kv[0], kv[1])
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("git config %s: %w", kv[0], err)
-		}
+	// Set receive.denyCurrentBranch=updateInstead so pushes to the checked-out
+	// branch update the working tree (non-bare repos normally reject this).
+	cfg, err := repo.Config()
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
 	}
+	cfg.Raw.SetOption("receive", "", "denyCurrentBranch", "updateInstead")
+	if err := repo.SetConfig(cfg); err != nil {
+		return fmt.Errorf("set config: %w", err)
+	}
+
 	return nil
 }
 
-// CloneRepo clones a remote URL into a new bare repo at <base>/<namespace>/<project>.
+// CloneRepo clones a remote URL into a new project at <base>/<namespace>/<project>.
 func (s *Store) CloneRepo(namespace, project, cloneURL string) error {
-	repoPath, err := s.RepoPath(namespace, project)
+	projPath, err := s.ProjectPath(namespace, project)
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(repoPath, "HEAD")); err == nil {
+	gitDir := filepath.Join(projPath, ".git")
+	if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); err == nil {
 		return fmt.Errorf("repository %s/%s already exists", namespace, project)
 	}
-	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(projPath), 0o755); err != nil {
 		return fmt.Errorf("create namespace directory: %w", err)
 	}
-	cmd := exec.Command("git", "clone", "--bare", cloneURL, repoPath)
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git clone --bare: %w", err)
+
+	_, err = gogit.PlainClone(projPath, &gogit.CloneOptions{
+		URL: cloneURL,
+	})
+	if err != nil {
+		return fmt.Errorf("git clone: %w", err)
 	}
-	return configureRepo(repoPath)
+	return nil
 }
 
-// RepoExists reports whether a bare repo exists at <base>/<namespace>/<project>.
+// RepoExists reports whether a repo exists at <base>/<namespace>/<project>.
 func (s *Store) RepoExists(namespace, project string) (bool, error) {
-	repoPath, err := s.RepoPath(namespace, project)
+	gitDir, err := s.GitDir(namespace, project)
 	if err != nil {
 		return false, err
 	}
-	_, serr := os.Stat(filepath.Join(repoPath, "HEAD"))
+	_, serr := os.Stat(filepath.Join(gitDir, "HEAD"))
 	if serr == nil {
 		return true, nil
 	}
@@ -132,6 +145,15 @@ func (s *Store) RepoExists(namespace, project string) (bool, error) {
 		return false, nil
 	}
 	return false, serr
+}
+
+// OpenRepo opens an existing repository.
+func (s *Store) OpenRepo(namespace, project string) (*gogit.Repository, error) {
+	projPath, err := s.ProjectPath(namespace, project)
+	if err != nil {
+		return nil, err
+	}
+	return gogit.PlainOpen(projPath)
 }
 
 // ListProjects returns all namespace/project pairs under the base directory.
@@ -178,7 +200,7 @@ func (s *Store) listNamespace(ns string) ([]ProjectInfo, error) {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		head := filepath.Join(nsDir, e.Name(), "HEAD")
+		head := filepath.Join(nsDir, e.Name(), ".git", "HEAD")
 		if _, err := os.Stat(head); err != nil {
 			continue
 		}
@@ -192,3 +214,4 @@ type ProjectInfo struct {
 	Namespace string `json:"namespace"`
 	Project   string `json:"project"`
 }
+

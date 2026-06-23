@@ -1,7 +1,7 @@
 // Command gityard is the GitYard server. It boots the inherited Shoka core —
 // userstore, oauthstore, the OAuth AS, auth middleware + authz gate, /auth/*,
-// /ws/ui — and adds Git hosting via Smart HTTP (clone/fetch/push), bare repo
-// management, and MCP tools for project/repo administration.
+// /ws/ui — and adds Git hosting via Smart HTTP (clone/fetch/push) using go-git v6
+// (pure Go, no external binary), with MCP tools for project/repo administration.
 package main
 
 import (
@@ -30,7 +30,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const version = "0.0.2-step2"
+const version = "0.0.3-step2r"
 
 func main() {
 	showVersion := flag.Bool("version", false, "Print the GitYard version and exit without starting the server.")
@@ -174,15 +174,15 @@ func run(cfg *Config, logger *slog.Logger) error {
 		Logger:             logger,
 	})
 
-	// ---- Git bare repository store ----
+	// ---- Git repository store (non-bare, .git/ layout) ----
 	gitStore := git.NewStore(cfg.Storage.BaseDir)
 
-	// ---- Smart HTTP handler (/git/<ns>/<proj>.git/...) ----
-	gitHTTP := git.NewSmartHTTPHandler(gitStore, logger)
-	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, stderrOut string) {
+	// ---- Smart HTTP handler (/git/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
+	gitHTTP := git.NewHandler(gitStore, logger)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal) {
 		logger.Info("post-receive",
 			"namespace", namespace, "project", project,
-			"principal", principal.Email, "stderr", stderrOut)
+			"principal", principal.Email)
 	}
 
 	// ---- /ws/ui user/OAuth management (Shoka core handlers, GitYard ws wrapper) ----
