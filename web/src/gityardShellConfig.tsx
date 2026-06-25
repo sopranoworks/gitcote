@@ -1,5 +1,5 @@
-import { useCallback } from 'react'
-import { Link, useRouterState } from '@tanstack/react-router'
+import { useCallback, useEffect } from 'react'
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
   Sidebar,
   ContentProvider,
@@ -103,35 +103,97 @@ function GitYardBreadcrumbs({ styles }: { styles: Record<string, string> }) {
   )
 }
 
+function parseProjectPrefix(pathname: string): { ns: string; proj: string } | null {
+  const m = pathname.match(/^\/p\/([^/]+)\/([^/]+)/)
+  if (!m) return null
+  return { ns: decodeURIComponent(m[1]), proj: decodeURIComponent(m[2]) }
+}
+
+function parseProjectFile(pathname: string): { ns: string; proj: string; path: string | null } | null {
+  const m = pathname.match(/^\/p\/([^/]+)\/([^/]+)(?:\/(?:blob|history)\/(.*))?$/)
+  if (!m) return null
+  return { ns: decodeURIComponent(m[1]), proj: decodeURIComponent(m[2]), path: m[3] ? decodeURIComponent(m[3]) : null }
+}
+
 function useGitYardRailControls(
   rail: string,
   sidebarOpen: boolean,
   setRail: (v: string) => void,
   setSidebarOpen: (open: boolean) => void,
 ): { onSelect: (v: string) => void; disabledItems: string[] } {
+  const navigate = useNavigate()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const hasProject = /^\/p\//.test(pathname)
+  const onProjectRoute = pathname.startsWith('/p/')
+  const onHistoryRoute = /^\/p\/[^/]+\/[^/]+\/history(\/|$)/.test(pathname)
+  const onSettingsRoute = isSettingsPath(pathname)
+
   const onSelect = useCallback(
     (v: string) => {
+      if (v !== 'settings' && !onProjectRoute) return
+
+      if (v === 'settings') {
+        if (onSettingsRoute && sidebarOpen) { setSidebarOpen(false); return }
+        setSidebarOpen(true)
+        const ref = parseProjectPrefix(pathname)
+        if (ref) {
+          void navigate({ to: '/p/$namespace/$project/settings', params: { namespace: ref.ns, project: ref.proj } })
+        } else {
+          void navigate({ to: '/settings' })
+        }
+        return
+      }
+
+      if (v === 'explorer' && onSettingsRoute) {
+        setRail('explorer')
+        setSidebarOpen(true)
+        const ref = parseProjectPrefix(pathname)
+        if (ref) {
+          void navigate({ to: '/p/$namespace/$project', params: { namespace: ref.ns, project: ref.proj } })
+        } else {
+          void navigate({ to: '/' })
+        }
+        return
+      }
+
+      if (v === 'explorer' && onHistoryRoute) {
+        const ref = parseProjectFile(pathname)
+        setRail('explorer')
+        setSidebarOpen(true)
+        if (ref?.path) {
+          void navigate({ to: '/p/$namespace/$project/blob/$', params: { namespace: ref.ns, project: ref.proj, _splat: ref.path } })
+        } else if (ref) {
+          void navigate({ to: '/p/$namespace/$project', params: { namespace: ref.ns, project: ref.proj } })
+        }
+        return
+      }
+
       if (v === rail && sidebarOpen) { setSidebarOpen(false); return }
       setRail(v)
       setSidebarOpen(true)
+
+      if (v === 'history') {
+        const ref = parseProjectFile(pathname)
+        if (ref) {
+          void navigate({ to: '/p/$namespace/$project/history/$', params: { namespace: ref.ns, project: ref.proj, _splat: ref.path ?? '' } })
+        }
+      }
     },
-    [rail, sidebarOpen, setRail, setSidebarOpen],
+    [onProjectRoute, onHistoryRoute, onSettingsRoute, rail, sidebarOpen, pathname, navigate, setRail, setSidebarOpen],
   )
-  const disabledItems = hasProject ? [] : ['explorer', 'search', 'history']
-  return { onSelect, disabledItems }
+
+  return { onSelect, disabledItems: onProjectRoute ? [] : ['explorer', 'search', 'history'] }
 }
 
 function useResetRailOnProjectChange(setRail: (v: string) => void): void {
-  const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const projMatch = pathname.match(/^\/p\/([^/]+)\/([^/]+)/)
-  const projKey = projMatch ? `${projMatch[1]}/${projMatch[2]}` : ''
-  const prev = { current: '' }
-  if (projKey && projKey !== prev.current) {
-    prev.current = projKey
-    setRail('explorer')
-  }
+  const projectKey = useRouterState({
+    select: (s) => {
+      const m = s.location.pathname.match(/^\/p\/([^/]+)\/([^/]+)/)
+      return m ? `${m[1]}/${m[2]}` : null
+    },
+  })
+  useEffect(() => {
+    if (projectKey) setRail('explorer')
+  }, [projectKey, setRail])
 }
 
 function deriveActiveRail(pathname: string, rail: string): string {
