@@ -1,7 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { useIsSuperUser, useManagesAnyNamespace } from '@shoka/web-core'
-import { useToast } from '@shoka/web-core'
+import { useToast, wsClient } from '@shoka/web-core'
 import { seedKeyGenerate, seedKeyList, seedKeyDelete, type SSHKeyInfo } from '../ops/seedOps'
 import styles from './SshKeysPage.module.css'
 
@@ -11,17 +10,12 @@ interface NamespaceKeys {
 }
 
 export function SshKeysPage() {
-  const isSuperUser = useIsSuperUser()
-  const managesAny = useManagesAnyNamespace()
   const qc = useQueryClient()
   const { add: toast } = useToast()
 
   const { data: healthData } = useQuery({
-    queryKey: ['namespace-health'],
-    queryFn: async () => {
-      const { wsClient } = await import('@shoka/web-core')
-      return wsClient().request<{ namespaces: { name: string }[] }>('NAMESPACE_HEALTH', {})
-    },
+    queryKey: ['ssh-keys-namespaces'],
+    queryFn: () => wsClient().request<{ namespaces: { name: string }[] }>('NAMESPACE_HEALTH', {}),
     staleTime: 30_000,
   })
 
@@ -72,15 +66,6 @@ export function SshKeysPage() {
     } catch (e) {
       toast({ level: 'warn', text: e instanceof Error ? e.message : 'Failed to delete key' })
     }
-  }
-
-  if (!isSuperUser && !managesAny) {
-    return (
-      <div className={styles.page}>
-        <h1 className={styles.title}>SSH Keys</h1>
-        <p className={styles.muted}>You do not have permission to manage SSH keys.</p>
-      </div>
-    )
   }
 
   return (

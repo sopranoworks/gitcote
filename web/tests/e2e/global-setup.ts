@@ -35,6 +35,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   dataDir = mkdtempSync(join(tmpdir(), 'gityard-e2e-data-'))
   const cfgPath = join(dataDir, 'gityard.yaml')
+  const oauthPort = PORT - 2
   writeFileSync(
     cfgPath,
     [
@@ -44,6 +45,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       '  mcp:',
       '    plain:',
       `      listen: ":${MCP_PORT}"`,
+      '    oauth:',
+      `      listen: ":${oauthPort}"`,
+      `      external_url: "http://localhost:${oauthPort}"`,
       '  log:',
       '    level: "warn"',
       '  auth:',

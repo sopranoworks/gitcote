@@ -6,6 +6,7 @@ import {
   Outlet,
   redirect,
   RouterProvider,
+  useRouterState,
 } from '@tanstack/react-router'
 import {
   Shell,
@@ -22,6 +23,12 @@ import { SshKeySection } from './components/SshKeySection'
 import { SeedConfigSection } from './components/SeedConfigSection'
 import { SshKeysPage } from './components/SshKeysPage'
 import { ResumeBanner } from './components/ResumeBanner'
+
+function SettingsResumeBanner() {
+  const item = useRouterState({ select: (s) => (s.location.search as { item?: string }).item })
+  if (item !== 'namespaces') return null
+  return <ResumeBanner />
+}
 
 const SettingsPage = lazy(() =>
   import('@shoka/web-core/pages/SettingsPage').then((m) => ({
@@ -52,16 +59,18 @@ const coreConfig: CoreScreensConfig = {
 
 function SettingsLazy() {
   return (
-    <Suspense fallback={<div style={{ padding: '2rem', color: 'var(--c-text-dim)' }}>Loading…</div>}>
-      <SettingsPage />
-    </Suspense>
+    <>
+      <SettingsResumeBanner />
+      <Suspense fallback={<div style={{ padding: '2rem', color: 'var(--c-text-dim)' }}>Loading…</div>}>
+        <SettingsPage />
+      </Suspense>
+    </>
   )
 }
 
 const rootRoute = createRootRoute({
   component: () => (
     <Shell>
-      <ResumeBanner />
       <Outlet />
     </Shell>
   ),
