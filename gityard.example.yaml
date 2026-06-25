@@ -10,8 +10,8 @@
 # reverse proxy.
 
 server:
-  # Human-facing surfaces: the /auth/* login API and the /ws/ui user/OAuth
-  # management WebSocket. (No web frontend yet — backend only.)
+  # Human-facing surfaces: WebUI (embedded frontend), /auth/* login API,
+  # /ws/ui management WebSocket, and /git/* Smart HTTP hosting.
   http:
     listen: ":8080"
     external_url: "http://localhost:8080"   # optional; reported by get_server_info
