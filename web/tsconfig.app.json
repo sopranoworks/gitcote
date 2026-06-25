@@ -9,6 +9,11 @@
 
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    "paths": {
+      "@shoka/web-core": ["../../shoka/packages/web-core/src/index.ts"],
+      "@shoka/web-core/pages/SettingsPage": ["../../shoka/packages/web-core/src/pages/SettingsPage.tsx"],
+      "@shoka/web-core/tokens.css": ["../../shoka/packages/web-core/src/styles/tokens.css"]
+    },
     "resolveJsonModule": true,
     "isolatedModules": true,
     "moduleDetection": "force",

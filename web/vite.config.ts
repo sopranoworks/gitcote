@@ -17,6 +17,7 @@ export default defineConfig({
       'react-dom': resolve(nm, 'react-dom'),
       '@tanstack/react-router': resolve(nm, '@tanstack/react-router'),
       '@tanstack/react-query': resolve(nm, '@tanstack/react-query'),
+      'react-resizable-panels': resolve(nm, 'react-resizable-panels'),
     },
   },
   build: {

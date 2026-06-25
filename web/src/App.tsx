@@ -8,15 +8,13 @@ import {
   RouterProvider,
 } from '@tanstack/react-router'
 import {
+  Shell,
   CoreScreensProvider,
-  SettingsItemList,
   type CoreScreensConfig,
   type SettingsItem,
 } from '@shoka/web-core'
 import { SshKeySection } from './components/SshKeySection'
 import { SeedConfigSection } from './components/SeedConfigSection'
-import { ResumeBanner } from './components/ResumeBanner'
-import styles from './App.module.css'
 
 const SettingsPage = lazy(() =>
   import('@shoka/web-core/pages/SettingsPage').then((m) => ({
@@ -36,25 +34,19 @@ const coreConfig: CoreScreensConfig = {
   ),
 }
 
-function SettingsLayout() {
+function SettingsLazy() {
   return (
-    <div className={styles.layout}>
-      <SettingsItemList />
-      <div className={styles.content}>
-        <Suspense fallback={<div className={styles.loading}>Loading…</div>}>
-          <SettingsPage />
-        </Suspense>
-      </div>
-    </div>
+    <Suspense fallback={<div style={{ padding: '2rem', color: 'var(--c-text-dim)' }}>Loading…</div>}>
+      <SettingsPage />
+    </Suspense>
   )
 }
 
 const rootRoute = createRootRoute({
   component: () => (
-    <div className={styles.root}>
-      <ResumeBanner />
+    <Shell>
       <Outlet />
-    </div>
+    </Shell>
   ),
 })
 
@@ -79,14 +71,14 @@ const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
   validateSearch: validateSettingsSearch,
-  component: SettingsLayout,
+  component: SettingsLazy,
 })
 
 const projectSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/p/$namespace/$project/settings',
   validateSearch: validateSettingsSearch,
-  component: SettingsLayout,
+  component: SettingsLazy,
 })
 
 const routeTree = rootRoute.addChildren([indexRoute, settingsRoute, projectSettingsRoute])

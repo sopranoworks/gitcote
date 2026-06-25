@@ -42,7 +42,7 @@ test.describe('Auth flow', () => {
     await page.getByRole('button', { name: 'Sign in' }).click()
 
     // After login, redirects to settings/management
-    await expect(page.getByText('Settings')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Settings', { exact: true })).toBeVisible({ timeout: 10000 })
   })
 
   test('settings page renders after login', async ({ page }) => {
