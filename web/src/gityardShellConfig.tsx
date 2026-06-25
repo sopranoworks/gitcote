@@ -1,36 +1,161 @@
+import { useCallback } from 'react'
+import { Link, useRouterState } from '@tanstack/react-router'
 import {
-  SettingsItemList,
-  useSimpleRailControls,
-  useNoopRailReset,
+  Sidebar,
+  ContentProvider,
   type ShellConfig,
 } from '@shoka/web-core'
 import { Toaster } from './components/Toaster'
+
+const EXPLORER_ICON = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+    <path d="M4 5.5h5l2 2h9v11H4z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+  </svg>
+)
+
+const SEARCH_ICON = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+    <circle cx="10.5" cy="10.5" r="6" stroke="currentColor" strokeWidth="1.6" />
+    <path d="M15 15l4.5 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>
+)
+
+const HISTORY_ICON = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+    <path d="M4 12a8 8 0 1 0 2.5-5.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    <path d="M4 4v3h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M12 8v4l3 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
 
 const SETTINGS_ICON = (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
     <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.6" />
     <path
       d="M12 3.5v2M12 18.5v2M20.5 12h-2M5.5 12h-2M17.5 6.5l-1.4 1.4M7.9 16.1l-1.4 1.4M17.5 17.5l-1.4-1.4M7.9 7.9 6.5 6.5"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
+      stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
     />
   </svg>
 )
 
-function GitYardSidebar({ view }: { view: string }) {
-  if (view === 'settings') return <SettingsItemList />
-  return <SettingsItemList />
+function isSettingsPath(pathname: string): boolean {
+  return pathname === '/settings' || /^\/p\/[^/]+\/[^/]+\/settings/.test(pathname)
+}
+
+type Crumb =
+  | { label: string; kind: 'ns'; ns: string }
+  | { label: string; kind: 'project'; ns: string; proj: string }
+  | { label: string; kind: 'blob'; ns: string; proj: string; path: string }
+
+function useCrumbs(): Crumb[] {
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const search = useRouterState({ select: (s) => s.location.search as { ns?: string } })
+  const crumbs: Crumb[] = []
+  const m = pathname.match(/^\/p\/([^/]+)\/([^/]+)(?:\/(?:blob|history)\/(.*))?$/)
+  if (!m) {
+    if (typeof search.ns === 'string' && search.ns) {
+      crumbs.push({ label: search.ns, kind: 'ns', ns: search.ns })
+    }
+    return crumbs
+  }
+  const ns = decodeURIComponent(m[1])
+  const proj = decodeURIComponent(m[2])
+  crumbs.push({ label: ns, kind: 'ns', ns })
+  crumbs.push({ label: proj, kind: 'project', ns, proj })
+  const rest = m[3]
+  if (rest) {
+    const segs = rest.split('/').filter(Boolean)
+    let accum = ''
+    segs.forEach((seg) => {
+      accum = accum ? `${accum}/${seg}` : seg
+      crumbs.push({ label: seg, kind: 'blob', ns, proj, path: accum })
+    })
+  }
+  return crumbs
+}
+
+function GitYardBreadcrumbs({ styles }: { styles: Record<string, string> }) {
+  const crumbs = useCrumbs()
+  if (crumbs.length === 0) return null
+  return (
+    <>
+      <span className={styles.brandChevron} aria-hidden="true">›</span>
+      <nav className={styles.crumbs} aria-label="Breadcrumb">
+        {crumbs.map((c, i) => {
+          const isLast = i === crumbs.length - 1
+          return (
+            <span key={i} className={styles.crumbItem}>
+              {i > 0 && <span className={styles.sep}>/</span>}
+              {isLast ? (
+                <span className={styles.crumbCurrent} aria-current="page">{c.label}</span>
+              ) : c.kind === 'ns' ? (
+                <Link to="/" search={{ ns: c.ns }} className={styles.crumbLink}>{c.label}</Link>
+              ) : c.kind === 'project' ? (
+                <Link to="/p/$namespace/$project" params={{ namespace: c.ns, project: c.proj }} className={styles.crumbLink}>{c.label}</Link>
+              ) : (
+                <span className={styles.crumbDir}>{c.label}</span>
+              )}
+            </span>
+          )
+        })}
+      </nav>
+    </>
+  )
+}
+
+function useGitYardRailControls(
+  rail: string,
+  sidebarOpen: boolean,
+  setRail: (v: string) => void,
+  setSidebarOpen: (open: boolean) => void,
+): { onSelect: (v: string) => void; disabledItems: string[] } {
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const hasProject = /^\/p\//.test(pathname)
+  const onSelect = useCallback(
+    (v: string) => {
+      if (v === rail && sidebarOpen) { setSidebarOpen(false); return }
+      setRail(v)
+      setSidebarOpen(true)
+    },
+    [rail, sidebarOpen, setRail, setSidebarOpen],
+  )
+  const disabledItems = hasProject ? [] : ['explorer', 'search', 'history']
+  return { onSelect, disabledItems }
+}
+
+function useResetRailOnProjectChange(setRail: (v: string) => void): void {
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const projMatch = pathname.match(/^\/p\/([^/]+)\/([^/]+)/)
+  const projKey = projMatch ? `${projMatch[1]}/${projMatch[2]}` : ''
+  const prev = { current: '' }
+  if (projKey && projKey !== prev.current) {
+    prev.current = projKey
+    setRail('explorer')
+  }
+}
+
+function deriveActiveRail(pathname: string, rail: string): string {
+  return isSettingsPath(pathname) ? 'settings' : rail === 'settings' ? 'explorer' : rail
+}
+
+function GitYardShellWrapper({ children }: { children: React.ReactNode }) {
+  return <ContentProvider>{children}</ContentProvider>
 }
 
 export const gityardShellConfig: ShellConfig = {
   brandName: 'GitYard',
   railItems: [
+    { id: 'explorer', label: 'Explorer', icon: EXPLORER_ICON },
+    { id: 'search', label: 'Search', icon: SEARCH_ICON },
+    { id: 'history', label: 'History', icon: HISTORY_ICON },
     { id: 'settings', label: 'Settings', icon: SETTINGS_ICON },
   ],
-  renderSidebar: (view) => <GitYardSidebar view={view} />,
+  renderSidebar: (view) => <Sidebar view={view} />,
+  renderBreadcrumbs: (styles) => <GitYardBreadcrumbs styles={styles} />,
   renderToaster: () => <Toaster />,
-  useRailControls: useSimpleRailControls,
-  useResetRailOnProjectChange: useNoopRailReset,
+  shellWrapper: GitYardShellWrapper,
+  useRailControls: useGitYardRailControls,
+  useResetRailOnProjectChange: useResetRailOnProjectChange,
+  deriveActiveRail,
   layoutAutoSaveId: 'gityard-layout',
 }

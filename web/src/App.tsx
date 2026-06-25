@@ -9,6 +9,11 @@ import {
 } from '@tanstack/react-router'
 import {
   Shell,
+  RepoListPage,
+  ProjectPage,
+  BlobPage,
+  HistoryPage,
+  SearchPage,
   CoreScreensProvider,
   type CoreScreensConfig,
   type SettingsItem,
@@ -62,21 +67,80 @@ const rootRoute = createRootRoute({
   ),
 })
 
-interface SettingsSearch {
-  item?: string
-}
+interface IndexSearch { ns?: string }
+
+const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/',
+  validateSearch: (search: Record<string, unknown>): IndexSearch => {
+    const ns = typeof search.ns === 'string' ? search.ns : undefined
+    return ns ? { ns } : {}
+  },
+  component: RepoListPage,
+})
+
+const projectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/p/$namespace/$project',
+  component: ProjectPage,
+})
+
+const blobRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/p/$namespace/$project/blob/$',
+  component: BlobPage,
+})
+
+interface HistorySearch { at?: string; from?: string; to?: string; mode?: 'version' | 'diff' }
+
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/p/$namespace/$project/history/$',
+  validateSearch: (search: Record<string, unknown>): HistorySearch => {
+    const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+    const mode = search.mode === 'version' || search.mode === 'diff' ? search.mode : undefined
+    return {
+      ...(str(search.at) ? { at: str(search.at) } : {}),
+      ...(str(search.from) ? { from: str(search.from) } : {}),
+      ...(str(search.to) ? { to: str(search.to) } : {}),
+      ...(mode ? { mode } : {}),
+    }
+  },
+  component: HistoryPage,
+})
+
+interface SearchSearch { q?: string }
+
+const searchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/p/$namespace/$project/search',
+  validateSearch: (search: Record<string, unknown>): SearchSearch => {
+    const q = typeof search.q === 'string' ? search.q : undefined
+    return q ? { q } : {}
+  },
+  component: SearchPage,
+})
+
+const connectionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/admin/connections',
+  beforeLoad: () => {
+    throw redirect({ to: '/settings', search: { item: 'oauth' } })
+  },
+})
+
+interface SettingsSearch { item?: string }
 
 function validateSettingsSearch(search: Record<string, unknown>): SettingsSearch {
   const item = typeof search.item === 'string' && search.item ? search.item : undefined
   return item ? { item } : {}
 }
 
-const indexRoute = createRoute({
+const projectSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/',
-  beforeLoad: () => {
-    throw redirect({ to: '/settings', search: { item: 'namespaces' } })
-  },
+  path: '/p/$namespace/$project/settings',
+  validateSearch: validateSettingsSearch,
+  component: SettingsLazy,
 })
 
 const settingsRoute = createRoute({
@@ -86,18 +150,22 @@ const settingsRoute = createRoute({
   component: SettingsLazy,
 })
 
-const projectSettingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/p/$namespace/$project/settings',
-  validateSearch: validateSettingsSearch,
-  component: SettingsLazy,
-})
-
-const routeTree = rootRoute.addChildren([indexRoute, settingsRoute, projectSettingsRoute])
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  projectRoute,
+  blobRoute,
+  historyRoute,
+  searchRoute,
+  connectionsRoute,
+  projectSettingsRoute,
+  settingsRoute,
+])
 
 const router = createRouter({
   routeTree,
   defaultPreload: 'intent',
+  scrollRestoration: true,
+  getScrollRestorationKey: (location) => location.href,
 })
 
 declare module '@tanstack/react-router' {
