@@ -1,0 +1,42 @@
+.toaster {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: var(--c-bg-elev-2, #1e222b);
+  border: 1px solid var(--c-border, #2a2f3a);
+  color: var(--c-text, #e6e9ef);
+  font-size: 0.85rem;
+  pointer-events: auto;
+  box-shadow: var(--shadow-overlay);
+}
+
+.toast[data-level='warn'] {
+  border-color: var(--c-warn, #e3b341);
+}
+
+.text {
+  flex: 1;
+}
+
+.close {
+  background: none;
+  border: none;
+  color: var(--c-text-dim, #a4abb8);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0 0.25rem;
+  line-height: 1;
+}

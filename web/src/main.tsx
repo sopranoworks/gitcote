@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ToastProvider, AdminProvider } from '@shoka/web-core'
 import { AuthGate } from './components/AuthGate'
+import { Toaster } from './components/Toaster'
 import { App } from './App'
 import './styles/global.css'
 
@@ -20,6 +21,7 @@ createRoot(document.getElementById('root')!).render(
           <AuthGate>
             <App />
           </AuthGate>
+          <Toaster />
         </AdminProvider>
       </ToastProvider>
     </QueryClientProvider>

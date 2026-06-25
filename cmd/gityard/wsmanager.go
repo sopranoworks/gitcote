@@ -8,8 +8,22 @@ import (
 	"sync/atomic"
 
 	"github.com/gorilla/websocket"
+	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 )
+
+var NsLevels = map[uiws.MessageType]uiws.Op{
+	MsgNamespaceHealth:  {Level: authz.LevelAdmin, Global: false},
+	MsgCreateNamespace:  {Level: authz.LevelAdmin, Global: true},
+	MsgDeleteNamespace:  {Level: authz.LevelAdmin, Global: true},
+	MsgCreateProject:    {Level: authz.LevelAdmin, Global: false},
+	MsgDeleteProject:    {Level: authz.LevelAdmin, Global: false},
+	MsgRenameProject:    {Level: authz.LevelAdmin, Global: false},
+	MsgRenameNamespace:  {Level: authz.LevelAdmin, Global: true},
+	MsgMoveProject:      {Level: authz.LevelAdmin, Global: true},
+	MsgNamespaceRecover: {Level: authz.LevelAdmin, Global: true},
+}
 
 type wsManager struct {
 	*uiws.CoreHandlers
@@ -18,17 +32,21 @@ type wsManager struct {
 	logger   *slog.Logger
 	connSeq  atomic.Uint64
 
-	levels  map[uiws.MessageType]uiws.Op
-	superOp map[uiws.MessageType]bool
-	seedCtx *seedContext
+	levels   map[uiws.MessageType]uiws.Op
+	superOp  map[uiws.MessageType]bool
+	seedCtx  *seedContext
+	gitStore *git.Store
 }
 
-func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, logger *slog.Logger) *wsManager {
-	levels := make(map[uiws.MessageType]uiws.Op, len(uiws.CoreLevels)+len(SeedLevels))
+func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, gitStore *git.Store, logger *slog.Logger) *wsManager {
+	levels := make(map[uiws.MessageType]uiws.Op, len(uiws.CoreLevels)+len(SeedLevels)+len(NsLevels))
 	for k, v := range uiws.CoreLevels {
 		levels[k] = v
 	}
 	for k, v := range SeedLevels {
+		levels[k] = v
+	}
+	for k, v := range NsLevels {
 		levels[k] = v
 	}
 
@@ -37,10 +55,11 @@ func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) boo
 		upgrader: websocket.Upgrader{
 			CheckOrigin: originAllowed,
 		},
-		logger:  logger,
-		levels:  levels,
-		superOp: map[uiws.MessageType]bool{},
-		seedCtx: sc,
+		logger:   logger,
+		levels:   levels,
+		superOp:  map[uiws.MessageType]bool{},
+		seedCtx:  sc,
+		gitStore: gitStore,
 	}
 }
 
@@ -75,6 +94,10 @@ func (m *wsManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if seedDispatch(client, m.seedCtx, wsMsg.Type, wsMsg.Payload) {
+			continue
+		}
+
+		if nsDispatch(client, m.gitStore, wsMsg.Type, wsMsg.Payload) {
 			continue
 		}
 

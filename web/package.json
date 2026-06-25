@@ -8,16 +8,19 @@
     "build": "tsc -b && vite build",
     "build:nocheck": "vite build",
     "typecheck": "tsc -b --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "npm run build:nocheck && ./scripts/e2e-docker.sh"
   },
   "dependencies": {
+    "@shoka/web-core": "file:../../shoka/packages/web-core",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-router": "^1.95.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "@shoka/web-core": "file:../../shoka/packages/web-core"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^26.0.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",

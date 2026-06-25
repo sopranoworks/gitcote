@@ -235,7 +235,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 			return rec.AccessToken, rec.AccessExpiry, nil
 		}))
 	}
-	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, logger)
+	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, logger)
 
 	// ---- MCP server (Git management tools + server info) ----
 	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, logger)
