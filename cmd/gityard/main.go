@@ -197,7 +197,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 		userStore: userStore,
 	}
 
-	// ---- Smart HTTP handler (/git/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
+	// ---- Smart HTTP handler (/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
 	gitHTTP := git.NewHandler(gitStore, logger)
 	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
 		logger.Info("post-receive",
@@ -315,36 +315,43 @@ func run(cfg *Config, logger *slog.Logger) error {
 }
 
 // setupWebHandler builds the Web mux: the /auth/* login surface, the /ws/ui
-// management WebSocket, and the /git/ Smart HTTP handler. /ws/ui takes the ?token=
-// query fallback (browsers cannot set an Authorization header on a WS handshake) and
-// additionally requires a login session once a user exists (RequireSession passes
-// through while the store is empty — no-lockout). The /git/ path uses HTTP Basic Auth
-// with the token in the password field (the standard git+PAT pattern). The whole mux
-// is wrapped by authHandler.Middleware so the session principal is attached to every
-// route (excluding /git/, which has its own auth layer).
+// management WebSocket, and the Smart HTTP handler (/<ns>/<proj>.git/...). The
+// .git suffix disambiguates git requests from frontend routes. /ws/ui takes the
+// ?token= query fallback and additionally requires a login session once a user
+// exists. Git transport uses HTTP Basic Auth with the token in the password field.
+// The whole mux is wrapped by authHandler.Middleware so the session principal is
+// attached to every route (excluding git, which has its own auth layer).
 func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, wsMgr http.Handler, gitHTTP http.Handler, validateToken func(string) (auth.Principal, auth.RejectReason, bool)) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/ws/ui", webAuth.MiddlewareAllowQueryToken(authHandler.RequireSession(wsMgr)))
 	mux.Handle("/auth/", authHandler)
-	mux.Handle("/git/", git.BasicAuthMiddleware(validateToken)(gitHTTP))
 
+	gitAuth := git.BasicAuthMiddleware(validateToken)(gitHTTP)
 	frontendFS, err := fs.Sub(distFS, "dist")
-	if err != nil {
-		mux.Handle("/", http.NotFoundHandler())
-	} else {
-		fileServer := http.FileServer(http.FS(frontendFS))
-		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			path := strings.TrimPrefix(r.URL.Path, "/")
-			if path == "" {
-				fileServer.ServeHTTP(w, r)
-				return
-			}
-			if _, ferr := frontendFS.Open(path); ferr != nil {
-				r.URL.Path = "/"
-			}
-			fileServer.ServeHTTP(w, r)
-		}))
+	var fileServer http.Handler
+	if err == nil {
+		fileServer = http.FileServer(http.FS(frontendFS))
 	}
+
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if git.IsGitRequest(r.URL.Path) {
+			gitAuth.ServeHTTP(w, r)
+			return
+		}
+		if fileServer == nil {
+			http.NotFound(w, r)
+			return
+		}
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		if _, ferr := frontendFS.Open(path); ferr != nil {
+			r.URL.Path = "/"
+		}
+		fileServer.ServeHTTP(w, r)
+	}))
 
 	return authHandler.Middleware(mux)
 }

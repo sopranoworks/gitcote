@@ -16,7 +16,7 @@ Repositories are isolated on the filesystem as `<base_dir>/<namespace>/<project>
   an external `git` binary.
 - **Pull request system** — create PRs via push options, review, approve, merge,
   view diffs and changed files.
-- **Repository browsing via MCP** — 16 tools over Streamable HTTP: file listing,
+- **Repository browsing via MCP** — 17 tools over Streamable HTTP: file listing,
   file reading, branches, commit log, commit detail, PR management, project
   administration, seed push, and seed status.
 - **SSH deploy key management** — namespace-scoped keys encrypted at rest

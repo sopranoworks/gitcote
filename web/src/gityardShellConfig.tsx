@@ -6,6 +6,7 @@ import {
   type ShellConfig,
 } from '@shoka/web-core'
 import { Toaster } from './components/Toaster'
+import { CloneUrl } from './components/CloneUrl'
 
 const EXPLORER_ICON = (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -200,8 +201,12 @@ function deriveActiveRail(pathname: string, rail: string): string {
   return isSettingsPath(pathname) ? 'settings' : rail === 'settings' ? 'explorer' : rail
 }
 
+const gityardContentConfig = {
+  renderProjectExtra: (ns: string, proj: string) => <CloneUrl namespace={ns} project={proj} />,
+}
+
 function GitYardShellWrapper({ children }: { children: React.ReactNode }) {
-  return <ContentProvider>{children}</ContentProvider>
+  return <ContentProvider value={gityardContentConfig}>{children}</ContentProvider>
 }
 
 export const gityardShellConfig: ShellConfig = {

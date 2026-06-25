@@ -21,7 +21,7 @@ import (
 )
 
 // Handler serves Git Smart HTTP using go-git v6's backend.Backend. It handles
-// URL routing (/git/<namespace>/<project>.git/<rest>), authorization, and
+// URL routing (/<namespace>/<project>.git/<rest>), authorization, and
 // delegates the Git protocol to go-git's pure Go implementation.
 type Handler struct {
 	store   *Store
@@ -50,10 +50,10 @@ func NewHandler(store *Store, logger *slog.Logger) *Handler {
 	return h
 }
 
-// ServeHTTP routes /git/<namespace>/<project>.git/<rest>.
+// ServeHTTP routes /<namespace>/<project>.git/<rest>.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/git/")
-	if path == r.URL.Path {
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	if path == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -107,8 +107,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pushOpts = opts
 	}
 
-	// Rewrite the URL path so the backend sees <namespace>/<project>.git/<rest>
-	// (without the /git/ prefix). The backend's regex-based router matches on this.
+	// The URL path is already /<namespace>/<project>.git/<rest> — pass it
+	// through to the backend's regex-based router.
 	r2 := r.Clone(r.Context())
 	r2.URL = &url.URL{
 		Path:     "/" + path,
@@ -196,6 +196,17 @@ func (l *storeLoader) Load(u *url.URL) (storage.Storer, error) {
 
 	fs := osfs.New(filepath.Clean(gitDir), osfs.WithBoundOS())
 	return filesystem.NewStorage(fs, cache.NewObjectLRUDefault()), nil
+}
+
+// IsGitRequest reports whether a URL path is a git transport request
+// (matches /<namespace>/<project>.git/<rest>).
+func IsGitRequest(path string) bool {
+	trimmed := strings.TrimPrefix(path, "/")
+	parts := strings.SplitN(trimmed, "/", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	return strings.HasSuffix(parts[1], ".git")
 }
 
 // BasicAuthMiddleware extracts a token from the HTTP Basic Auth password field

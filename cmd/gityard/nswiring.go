@@ -83,13 +83,23 @@ func handleNamespaceHealth(c *uiws.Client, gitStore *git.Store) {
 		ns := e.Name()
 		projs, _ := gitStore.ListProjects(ns)
 		var projects []projectHealth
+		allHealthy := true
 		for _, p := range projs {
-			projects = append(projects, projectHealth{Name: p.Project, State: "healthy"})
+			state := "healthy"
+			headPath := filepath.Join(gitStore.BaseDir(), p.Namespace, p.Project, ".git", "HEAD")
+			if _, serr := os.Stat(headPath); serr != nil {
+				state = "corrupted"
+				allHealthy = false
+			} else if _, oerr := gitStore.OpenRepo(p.Namespace, p.Project); oerr != nil {
+				state = "corrupted"
+				allHealthy = false
+			}
+			projects = append(projects, projectHealth{Name: p.Project, State: state})
 		}
 		namespaces = append(namespaces, namespaceHealth{
 			Name:     ns,
 			Present:  true,
-			Healthy:  true,
+			Healthy:  allHealthy,
 			Projects: projects,
 		})
 	}

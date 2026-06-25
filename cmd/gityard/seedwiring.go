@@ -26,6 +26,7 @@ const (
 	MsgSeedKeyDelete uiws.MessageType = "SEED_KEY_DELETE"
 	MsgSeedTest      uiws.MessageType = "SEED_TEST"
 	MsgSeedPush      uiws.MessageType = "SEED_PUSH"
+	MsgSeedPull      uiws.MessageType = "SEED_PULL"
 	MsgSeedResume    uiws.MessageType = "SEED_RESUME"
 	MsgSeedStatus    uiws.MessageType = "SEED_STATUS"
 )
@@ -39,6 +40,7 @@ var SeedLevels = map[uiws.MessageType]uiws.Op{
 	MsgSeedKeyDelete: {Level: authz.LevelAdmin, Global: false},
 	MsgSeedTest:      {Level: authz.LevelAdmin, Global: false},
 	MsgSeedPush:      {Level: authz.LevelWrite, Global: false},
+	MsgSeedPull:      {Level: authz.LevelWrite, Global: false},
 	MsgSeedResume:    {Level: authz.LevelAdmin, Global: true},
 	MsgSeedStatus:    {Level: authz.LevelRead, Global: false},
 }
@@ -67,6 +69,8 @@ func seedDispatch(c *uiws.Client, sc *seedContext, msgType uiws.MessageType, pay
 		handleSeedTest(c, sc, payload)
 	case MsgSeedPush:
 		handleSeedPushWS(c, sc, payload)
+	case MsgSeedPull:
+		handleSeedPullWS(c, sc, payload)
 	case MsgSeedResume:
 		handleSeedResume(c, sc, payload)
 	case MsgSeedStatus:
@@ -261,6 +265,51 @@ func handleSeedPushWS(c *uiws.Client, sc *seedContext, payload json.RawMessage) 
 	c.SendResponse(MsgSeedPush, map[string]interface{}{"success": true})
 }
 
+func handleSeedPullWS(c *uiws.Client, sc *seedContext, payload json.RawMessage) {
+	var p seedTargetPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	if sc.vault.State() != vault.VaultUnlocked {
+		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": "vault is locked — resume required"})
+		return
+	}
+	projPath, err := sc.gitStore.ProjectPath(p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	cfg, err := git.LoadSeedConfig(projPath)
+	if err != nil {
+		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	if cfg.SeedURL == "" {
+		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": "no seed URL configured"})
+		return
+	}
+	if cfg.KeyName == "" {
+		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": "no key configured"})
+		return
+	}
+	pemData, err := sc.vault.DecryptPrivateKey(p.Namespace, cfg.KeyName)
+	if err != nil {
+		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	repo, err := sc.gitStore.OpenRepo(p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": fmt.Sprintf("open repo: %v", err)})
+		return
+	}
+	if err := git.PullFromSeed(repo, cfg.SeedURL, "", pemData); err != nil {
+		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	c.SendResponse(MsgSeedPull, map[string]interface{}{"success": true})
+}
+
 func handleSeedResume(c *uiws.Client, sc *seedContext, payload json.RawMessage) {
 	var p seedResumePayload
 	if err := json.Unmarshal(payload, &p); err != nil {
@@ -399,6 +448,41 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "pull_from_seed",
+		Description: "Pull (fetch + fast-forward) from the configured seed repository via SSH.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in pullFromSeedInput) (*mcp.CallToolResult, pullFromSeedOutput, error) {
+		if v.State() != vault.VaultUnlocked {
+			return nil, pullFromSeedOutput{Success: false, Message: "vault is locked — resume required"}, nil
+		}
+		projPath, err := gitStore.ProjectPath(in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, pullFromSeedOutput{}, err
+		}
+		cfg, err := git.LoadSeedConfig(projPath)
+		if err != nil {
+			return nil, pullFromSeedOutput{}, err
+		}
+		if cfg.SeedURL == "" {
+			return nil, pullFromSeedOutput{Success: false, Message: "no seed URL configured"}, nil
+		}
+		if cfg.KeyName == "" {
+			return nil, pullFromSeedOutput{Success: false, Message: "no key configured"}, nil
+		}
+		pemData, err := v.DecryptPrivateKey(in.Namespace, cfg.KeyName)
+		if err != nil {
+			return nil, pullFromSeedOutput{Success: false, Message: err.Error()}, nil
+		}
+		repo, err := gitStore.OpenRepo(in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, pullFromSeedOutput{}, fmt.Errorf("open repo: %w", err)
+		}
+		if err := git.PullFromSeed(repo, cfg.SeedURL, in.Branch, pemData); err != nil {
+			return nil, pullFromSeedOutput{Success: false, Message: err.Error()}, nil
+		}
+		return nil, pullFromSeedOutput{Success: true, Message: "pulled successfully"}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_seed_status",
 		Description: "Get seed sync status for a project.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in getSeedStatusInput) (*mcp.CallToolResult, getSeedStatusOutput, error) {
@@ -435,6 +519,17 @@ type pushToSeedInput struct {
 }
 
 type pushToSeedOutput struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type pullFromSeedInput struct {
+	Namespace   string `json:"namespace" jsonschema:"required,the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+	Branch      string `json:"branch,omitempty" jsonschema:"branch to pull (default: main)"`
+}
+
+type pullFromSeedOutput struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 }

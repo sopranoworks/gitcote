@@ -32,12 +32,8 @@ func TestSmartHTTPRoundTrip(t *testing.T) {
 		postReceiveCalls++
 	}
 
-	ts := httptest.NewServer(http.StripPrefix("/git", handler))
-	defer ts.Close()
-
-	// Wrap with /git prefix to match the real URL pattern.
 	mux := http.NewServeMux()
-	mux.Handle("/git/", handler)
+	mux.Handle("/", handler)
 	ts2 := httptest.NewServer(mux)
 	defer ts2.Close()
 
@@ -47,7 +43,7 @@ func TestSmartHTTPRoundTrip(t *testing.T) {
 
 	// Clone (empty repo).
 	cloneDir := t.TempDir()
-	runGit(t, cloneDir, "clone", ts2.URL+"/git/test-ns/test-proj.git", "repo")
+	runGit(t, cloneDir, "clone", ts2.URL+"/test-ns/test-proj.git", "repo")
 	repoDir := filepath.Join(cloneDir, "repo")
 
 	// Make a commit and push.
@@ -60,7 +56,7 @@ func TestSmartHTTPRoundTrip(t *testing.T) {
 
 	// Clone again into a fresh directory and verify the pushed content.
 	verifyDir := t.TempDir()
-	runGit(t, verifyDir, "clone", ts2.URL+"/git/test-ns/test-proj.git", "verify")
+	runGit(t, verifyDir, "clone", ts2.URL+"/test-ns/test-proj.git", "verify")
 	verifyRepoDir := filepath.Join(verifyDir, "verify")
 	content, err := os.ReadFile(filepath.Join(verifyRepoDir, "hello.txt"))
 	if err != nil {
@@ -86,7 +82,7 @@ func TestSmartHTTPNonexistentRepo(t *testing.T) {
 
 	handler := git.NewHandler(store, logger)
 	mux := http.NewServeMux()
-	mux.Handle("/git/", handler)
+	mux.Handle("/", handler)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
@@ -114,7 +110,7 @@ func TestSmartHTTPBasicAuth(t *testing.T) {
 		return auth.Principal{}, auth.ReasonInvalidToken, false
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/git/", git.BasicAuthMiddleware(validate)(handler))
+	mux.Handle("/", git.BasicAuthMiddleware(validate)(handler))
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
@@ -133,7 +129,7 @@ func TestSmartHTTPBasicAuth(t *testing.T) {
 	}
 
 	// Bad token → 401.
-	req, _ := http.NewRequest("GET", ts.URL+"/git/default/auth-test.git/info/refs?service=git-upload-pack", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/default/auth-test.git/info/refs?service=git-upload-pack", nil)
 	req.SetBasicAuth("x-token", "bad-token")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
@@ -145,7 +141,7 @@ func TestSmartHTTPBasicAuth(t *testing.T) {
 	}
 
 	// Valid token → 200.
-	req, _ = http.NewRequest("GET", ts.URL+"/git/default/auth-test.git/info/refs?service=git-upload-pack", nil)
+	req, _ = http.NewRequest("GET", ts.URL+"/default/auth-test.git/info/refs?service=git-upload-pack", nil)
 	req.SetBasicAuth("x-token", "valid-token")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
@@ -187,7 +183,7 @@ func TestConcurrentPush(t *testing.T) {
 
 	handler := git.NewHandler(store, logger)
 	mux := http.NewServeMux()
-	mux.Handle("/git/", handler)
+	mux.Handle("/", handler)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
@@ -197,7 +193,7 @@ func TestConcurrentPush(t *testing.T) {
 
 	// Initial push to create main branch.
 	workDir := t.TempDir()
-	runGit(t, workDir, "clone", ts.URL+"/git/default/conc.git", "setup")
+	runGit(t, workDir, "clone", ts.URL+"/default/conc.git", "setup")
 	setupDir := filepath.Join(workDir, "setup")
 	os.WriteFile(filepath.Join(setupDir, "init.txt"), []byte("init"), 0o644)
 	runGit(t, setupDir, "add", "init.txt")
@@ -212,7 +208,7 @@ func TestConcurrentPush(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			d := t.TempDir()
-			runGitErr(t, d, "clone", ts.URL+"/git/default/conc.git", fmt.Sprintf("w%d", idx))
+			runGitErr(t, d, "clone", ts.URL+"/default/conc.git", fmt.Sprintf("w%d", idx))
 			wd := filepath.Join(d, fmt.Sprintf("w%d", idx))
 			os.WriteFile(filepath.Join(wd, fmt.Sprintf("file%d.txt", idx)), []byte(fmt.Sprintf("data%d", idx)), 0o644)
 			runGitErr(t, wd, "add", ".")
@@ -230,7 +226,7 @@ func TestConcurrentPush(t *testing.T) {
 
 	// Verify both branches exist by cloning and checking refs.
 	verifyDir := t.TempDir()
-	runGit(t, verifyDir, "clone", ts.URL+"/git/default/conc.git", "verify")
+	runGit(t, verifyDir, "clone", ts.URL+"/default/conc.git", "verify")
 	vd := filepath.Join(verifyDir, "verify")
 	runGit(t, vd, "branch", "-r")
 }

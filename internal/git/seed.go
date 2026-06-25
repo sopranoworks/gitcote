@@ -11,6 +11,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/config"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/client"
 	"github.com/go-git/go-git/v6/plumbing/transport/ssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -128,6 +129,66 @@ func PushToSeed(repo *gogit.Repository, seedURL string, branch string, privateKe
 	})
 	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return fmt.Errorf("push: %w", err)
+	}
+	return nil
+}
+
+// PullFromSeed fetches from the seed repository and fast-forwards the local branch.
+func PullFromSeed(repo *gogit.Repository, seedURL string, branch string, privateKeyPEM []byte) error {
+	if seedURL == "" {
+		return fmt.Errorf("no seed URL configured")
+	}
+	if branch == "" {
+		branch = "main"
+	}
+
+	auth, err := sshAuthFromPEM(privateKeyPEM)
+	if err != nil {
+		return err
+	}
+
+	remote, err := repo.Remote(seedRemoteName)
+	if err != nil {
+		remote, err = repo.CreateRemote(&config.RemoteConfig{
+			Name: seedRemoteName,
+			URLs: []string{seedURL},
+		})
+		if err != nil {
+			return fmt.Errorf("create remote: %w", err)
+		}
+	} else if len(remote.Config().URLs) == 0 || remote.Config().URLs[0] != seedURL {
+		_ = repo.DeleteRemote(seedRemoteName)
+		remote, err = repo.CreateRemote(&config.RemoteConfig{
+			Name: seedRemoteName,
+			URLs: []string{seedURL},
+		})
+		if err != nil {
+			return fmt.Errorf("recreate remote: %w", err)
+		}
+	}
+
+	refSpec := config.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, seedRemoteName, branch))
+	err = remote.Fetch(&gogit.FetchOptions{
+		RemoteName:    seedRemoteName,
+		RefSpecs:      []config.RefSpec{refSpec},
+		ClientOptions: []client.Option{client.WithSSHAuth(auth)},
+	})
+	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		return fmt.Errorf("fetch: %w", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("worktree: %w", err)
+	}
+
+	err = wt.Pull(&gogit.PullOptions{
+		RemoteName:    seedRemoteName,
+		ReferenceName: plumbing.ReferenceName("refs/heads/" + branch),
+		ClientOptions: []client.Option{client.WithSSHAuth(auth)},
+	})
+	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
+		return fmt.Errorf("pull: %w", err)
 	}
 	return nil
 }

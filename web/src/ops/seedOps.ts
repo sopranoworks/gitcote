@@ -94,6 +94,13 @@ export function seedPush(
   return wsClient().request('SEED_PUSH', { namespace, projectName, branch })
 }
 
+export function seedPull(
+  namespace: string,
+  projectName: string,
+): Promise<{ success: boolean; error?: string }> {
+  return wsClient().request('SEED_PULL', { namespace, projectName })
+}
+
 export function seedResume(
   email: string,
   password: string,

@@ -151,14 +151,15 @@ The `http://localhost:8081/mcp` shown matches `gityard.example.yaml`'s default
 
 ## Git hosting
 
-Repositories are hosted at `/git/<namespace>/<project>.git/` over Smart HTTP
-(pure Go, go-git v6 — no external `git` binary required).
+Repositories are hosted at `/<namespace>/<project>.git/` over Smart HTTP
+(pure Go, go-git v6 — no external `git` binary required). The `.git`
+suffix distinguishes git transport requests from WebUI routes.
 
 ### Clone and push
 
 ```sh
 # Clone
-git clone http://localhost:8080/git/default/myproject.git
+git clone http://localhost:8080/default/myproject.git
 
 # Push
 git push origin main
@@ -287,7 +288,7 @@ static-bearer / unauthenticated path.
 
 ## MCP tools reference
 
-GitYard exposes **16 MCP tools** over Streamable HTTP at `/mcp`:
+GitYard exposes **17 MCP tools** over Streamable HTTP at `/mcp`:
 
 ### Server
 
@@ -328,6 +329,7 @@ GitYard exposes **16 MCP tools** over Streamable HTTP at `/mcp`:
 | Tool | Parameters | Description |
 |------|-----------|-------------|
 | `push_to_seed` | `namespace`, `project_name`, `branch`? | Push a branch to the configured seed repository via SSH. |
+| `pull_from_seed` | `namespace`, `project_name`, `branch`? | Pull (fetch + fast-forward) from the seed repository via SSH. |
 | `get_seed_status` | `namespace`, `project_name` | Seed sync status, push mode, and vault state. |
 
 ## TLS

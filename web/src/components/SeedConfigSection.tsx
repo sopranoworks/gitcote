@@ -8,6 +8,7 @@ import {
   seedKeyList,
   seedTest,
   seedPush,
+  seedPull,
 } from '../ops/seedOps'
 import { SeedStatusBadge } from './SeedStatusBadge'
 import styles from './SeedConfigSection.module.css'
@@ -86,6 +87,7 @@ function SeedConfigForm({
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [pushing, setPushing] = useState(false)
+  const [pulling, setPulling] = useState(false)
 
   const { data: config } = useQuery({
     queryKey: ['seed-config', namespace, project],
@@ -157,6 +159,24 @@ function SeedConfigForm({
     }
   }
 
+  async function handlePull() {
+    setPulling(true)
+    try {
+      const result = await seedPull(namespace, project)
+      if (result.success) {
+        toast({ level: 'warn', text: 'Pull succeeded.' })
+        void qc.invalidateQueries({ queryKey: ['seed-status', namespace, project] })
+        void qc.invalidateQueries({ queryKey: ['tree', namespace, project] })
+      } else {
+        toast({ level: 'warn', text: result.error ?? 'Pull failed.' })
+      }
+    } catch (e) {
+      toast({ level: 'warn', text: e instanceof Error ? e.message : 'Pull failed.' })
+    } finally {
+      setPulling(false)
+    }
+  }
+
   return (
     <div className={styles.form}>
       <div className={styles.field}>
@@ -219,6 +239,9 @@ function SeedConfigForm({
         </button>
         <button className={styles.btn} onClick={() => void handlePush()} disabled={pushing || !seedUrl || !keyName}>
           {pushing ? 'Pushing…' : 'Push Now'}
+        </button>
+        <button className={styles.btn} onClick={() => void handlePull()} disabled={pulling || !seedUrl || !keyName}>
+          {pulling ? 'Pulling…' : 'Pull from Seed'}
         </button>
       </div>
     </div>
