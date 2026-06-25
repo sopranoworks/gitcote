@@ -1,4 +1,4 @@
-# GitYard example configuration (step 1 — skeleton server).
+# GitYard example configuration.
 #
 # Copy to gityard.yaml (or pass via --config) and adjust:
 #     ./gityard --config gityard.example.yaml
@@ -11,7 +11,7 @@
 
 server:
   # Human-facing surfaces: the /auth/* login API and the /ws/ui user/OAuth
-  # management WebSocket. (No web frontend yet — backend only in step 1.)
+  # management WebSocket. (No web frontend yet — backend only.)
   http:
     listen: ":8080"
     external_url: "http://localhost:8080"   # optional; reported by get_server_info
@@ -32,6 +32,39 @@ server:
     oauth:
       # listen: ":8082"
       # external_url: "https://your-public-origin"
+      #
+      # Client-registration posture advertised in the AS metadata. One of:
+      #   cimd (default) — advertise client_id_metadata_document_supported, NO
+      #                    registration_endpoint. Claude selects CIMD.
+      #   dcr            — advertise registration_endpoint (RFC 7591) and WITHHOLD
+      #                    the CIMD signal, so Claude performs Dynamic Client Registration.
+      #   confidential   — pre-issued Client ID + Secret (operator issues from Web UI;
+      #                    client authenticates at /token with secret + PKCE).
+      # Flip this and re-test the live claude.ai connect each way; no rebuild needed.
+      # registration_mode: "cimd"
+      #
+      # Token lifetimes and per-domain trust/consent/TTL are managed in the web UI
+      # (Settings → OAuth), not in this config file. The OAuth AS uses built-in finite
+      # defaults (access 1h, refresh 90d, code 1m) when no per-domain override is set.
+
+  # Structured logging. Optional — omit the whole block for info/text on stderr.
+  #
+  # `output` selects WHERE log output goes:
+  #   stderr  (default) — capture with a service manager (journald/launchd)
+  #   file              — a bounded log file (see `file:` below)
+  # `level`/`format` apply to whichever destination is selected.
+  log:
+    level: "info"     # error | warn | info | debug
+    format: "text"    # text | json
+    output: "stderr"  # stderr (default) | file
+    # When output: file, the file is BOUNDED (it never grows forever):
+    # file:
+    #   path: /var/log/gityard/gityard.log  # required; parent dirs created
+    #   max_size_mb: 100      # rotate the active file past this size (0 => 100)
+    #   max_backups: 7        # rotated backups kept (0 => 7)
+    #   max_age_days: 30      # days rotated backups kept (0 => 30)
+    #   compress: false       # gzip rotated backups
+    #   rotate_daily: true    # also rotate at least once a day (default true)
 
   # Web-route auth: the static-bearer policy + WebSocket origin allowlist, and the
   # multi-user login store settings. This NEVER gates the MCP OAuth path.
@@ -44,6 +77,13 @@ server:
       allow_first_run_admin: true   # allow bootstrapping the first admin on an empty store
       # totp_encryption_key: ""     # base64 32-byte key; generated + persisted if empty
 
+  # Operator-only diagnostics. OFF by default.
+  debug:
+    # Verbatim HTTP request/response dump. When true, EVERY request and EVERY
+    # response on all surfaces is logged in full — method, path, headers, body,
+    # status. Intended for connect/debug sessions, not steady-state.
+    dump_http: false
+
 storage:
   base_dir: "~/.gityard"
 
@@ -52,9 +92,3 @@ identity:
   user:
     name: "operator"
     email: "operator@localhost"
-
-# OAuth token lifetimes (only consulted when the oauth transport is enabled).
-oauth:
-  access_token_ttl: "1h"
-  refresh_token_ttl: "720h"
-  authorization_code_ttl: "5m"

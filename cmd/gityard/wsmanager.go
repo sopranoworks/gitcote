@@ -11,17 +11,6 @@ import (
 	"github.com/sopranoworks/shoka/pkg/uiws"
 )
 
-// wsManager is GitYard's thin /ws/ui WebSocket manager. It owns the connection
-// upgrade and the request/response read loop, and delegates every message to the
-// embedded *uiws.CoreHandlers — the reusable auth/user/OAuth slice extracted from
-// Shoka for exactly this reuse. GitYard supplies NO document/Git handlers yet (step
-// 1), so a message the core does not handle is an unknown op.
-//
-// This mirrors internal/ui.Manager's serve loop, stripped to the core surface: it
-// merges uiws.CoreLevels (the authorization table) with no extra rows and passes an
-// empty super-user-op set (the core contributes none — later Git/PR ops will add
-// theirs). The shared Client.Gate enforces authz before each handler, exactly as in
-// Shoka.
 type wsManager struct {
 	*uiws.CoreHandlers
 
@@ -31,17 +20,27 @@ type wsManager struct {
 
 	levels  map[uiws.MessageType]uiws.Op
 	superOp map[uiws.MessageType]bool
+	seedCtx *seedContext
 }
 
-func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, logger *slog.Logger) *wsManager {
+func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, logger *slog.Logger) *wsManager {
+	levels := make(map[uiws.MessageType]uiws.Op, len(uiws.CoreLevels)+len(SeedLevels))
+	for k, v := range uiws.CoreLevels {
+		levels[k] = v
+	}
+	for k, v := range SeedLevels {
+		levels[k] = v
+	}
+
 	return &wsManager{
 		CoreHandlers: core,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: originAllowed,
 		},
 		logger:  logger,
-		levels:  uiws.CoreLevels,
+		levels:  levels,
 		superOp: map[uiws.MessageType]bool{},
+		seedCtx: sc,
 	}
 }
 
@@ -53,8 +52,6 @@ func (m *wsManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// NewClient captures the WebUI session principal (attached by authapi.Middleware)
-	// from the upgrade request, so the gate can read the connection's scope.
 	client := uiws.NewClient(conn, fmt.Sprintf("ws-%d", m.connSeq.Add(1)), r)
 
 	for {
@@ -69,21 +66,18 @@ func (m *wsManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Single authorization choke point: every message is gated here, before its
-		// handler, through the shared authz.Authorize. A refusal sends
-		// PERMISSION_DENIED and skips dispatch.
 		if !client.Gate(wsMsg.Type, wsMsg.Payload, m.levels, m.superOp) {
 			continue
 		}
 
-		// Core ops (ACCOUNT_*/ADMIN_*/OAUTH_*/DOMAIN_*/CLIENT_*) are handled by the
-		// embedded CoreHandlers; Dispatch returns true when it handled the message.
 		if m.Dispatch(client, wsMsg.Type, wsMsg.Payload) {
 			continue
 		}
 
-		// GitYard has no document/Git handlers yet (step 1): anything the core did not
-		// claim is an unknown op.
+		if seedDispatch(client, m.seedCtx, wsMsg.Type, wsMsg.Payload) {
+			continue
+		}
+
 		client.SendError(fmt.Sprintf("Unknown message type: %s", wsMsg.Type))
 	}
 }

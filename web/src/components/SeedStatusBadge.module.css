@@ -1,0 +1,31 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  color: var(--c-text-dim, #a4abb8);
+  cursor: default;
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dot[data-state='active'] {
+  background: var(--c-good, #41c980);
+}
+
+.dot[data-state='pending'] {
+  background: var(--c-warn, #e3b341);
+}
+
+.dot[data-state='disabled'] {
+  background: var(--c-text-faint, #6b7280);
+}
+
+.dot[data-state='error'] {
+  background: var(--c-bad, #f7768e);
+}

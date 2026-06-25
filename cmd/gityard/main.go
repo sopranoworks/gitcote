@@ -9,25 +9,31 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"io/fs"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gityard/internal/vault"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/authapi"
 	"github.com/sopranoworks/shoka/pkg/oauth"
 	"github.com/sopranoworks/shoka/pkg/oauthstore"
+	"github.com/sopranoworks/shoka/pkg/reqtrace"
 	"github.com/sopranoworks/shoka/pkg/serverurl"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 	"github.com/sopranoworks/shoka/pkg/userstore"
 	"golang.org/x/sync/errgroup"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const version = "0.0.3-step2r"
@@ -42,13 +48,17 @@ func main() {
 		return
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
-
 	cfg, err := Load(*configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
+
+	logDest, logger, err := buildLogger(cfg.Server.Log)
+	if err != nil {
+		log.Fatalf("failed to configure logging: %v", err)
+	}
+	defer logDest.Close()
+	slog.SetDefault(logger)
 
 	if err := run(cfg, logger); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("server error", "error", err)
@@ -88,7 +98,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	oauthEnabled := cfg.OAuthEnabled()
 	discoveryCfg := oauth.DiscoveryConfig{
 		ExternalURL:      cfg.Server.MCP.OAuth.ExternalURL,
-		RegistrationMode: oauth.RegistrationMode("dcr"),
+		RegistrationMode: oauth.RegistrationMode(cfg.Server.MCP.OAuth.RegistrationModeOrDefault()),
 		Logger:           logger,
 	}
 	if oauthEnabled {
@@ -124,10 +134,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 				Name:  cfg.Identity.User.Name,
 				Email: cfg.Identity.User.Email,
 			},
-			AccessTTL:  cfg.OAuth.AccessTokenTTL.Or(time.Hour),
-			RefreshTTL: cfg.OAuth.RefreshTokenTTL.Or(720 * time.Hour),
-			CodeTTL:    cfg.OAuth.AuthorizationCodeTTL.Or(5 * time.Minute),
-			Logger:     logger,
+			Logger: logger,
 		})
 
 		// Token enforcement on the MCP path: a valid access token is required and its
@@ -177,6 +184,19 @@ func run(cfg *Config, logger *slog.Logger) error {
 	// ---- Git repository store (non-bare, .git/ layout) ----
 	gitStore := git.NewStore(cfg.Storage.BaseDir)
 
+	// ---- SSH key vault (namespace-scoped, encrypted at rest) ----
+	keyVault, err := vault.Open(filepath.Join(cfg.Storage.BaseDir, "keys.db"))
+	if err != nil {
+		return fmt.Errorf("open key vault: %w", err)
+	}
+	defer func() { _ = keyVault.Close() }()
+
+	seedCtx := &seedContext{
+		gitStore:  gitStore,
+		vault:     keyVault,
+		userStore: userStore,
+	}
+
 	// ---- Smart HTTP handler (/git/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
 	gitHTTP := git.NewHandler(gitStore, logger)
 	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
@@ -198,7 +218,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 				return "", time.Time{}, berr
 			}
 			if accessTTL <= 0 {
-				accessTTL = cfg.OAuth.AccessTokenTTL.Or(time.Hour)
+				accessTTL = time.Hour
 			}
 			rec, nerr := oauthStore.NewSeries(
 				oauthstore.SelfIssuedClientID,
@@ -215,10 +235,13 @@ func run(cfg *Config, logger *slog.Logger) error {
 			return rec.AccessToken, rec.AccessExpiry, nil
 		}))
 	}
-	wsMgr := newWSManager(core, webAuth.OriginAllowed, logger)
+	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, logger)
 
 	// ---- MCP server (Git management tools + server info) ----
-	mcpServer := setupMCPServer(cfg, gitStore, logger)
+	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, logger)
+
+	// ---- Seed push scheduler (periodic mode) ----
+	startSeedScheduler(ctx, seedCtx, logger)
 
 	// ---- HTTP listeners ----
 	g, ctx := errgroup.WithContext(ctx)
@@ -246,9 +269,11 @@ func run(cfg *Config, logger *slog.Logger) error {
 		}
 	}
 
+	dumpHTTP := cfg.Server.Debug.DumpHTTP
+
 	// Web listener: /auth/*, /ws/ui, /git/*, static (none yet). The whole mux is wrapped
 	// by authHandler.Middleware so the session principal is resolved for every route.
-	webHandler := setupWebHandler(webAuth, authHandler, wsMgr, gitHTTP, gitValidateToken)
+	webHandler := reqtrace.Middleware(logger, "web", dumpHTTP)(setupWebHandler(webAuth, authHandler, wsMgr, gitHTTP, gitValidateToken))
 	g.Go(func() error {
 		return runServer(ctx, "web", cfg.Server.HTTP.Listen, webHandler, logger)
 	})
@@ -266,7 +291,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 		} else {
 			plainAuth = auth.New(auth.Config{}) // disabled → allow all (loopback use)
 		}
-		handler := plainAuth.Middleware(newMCPHandler())
+		handler := reqtrace.Middleware(logger, "mcp-plain", dumpHTTP)(plainAuth.Middleware(newMCPHandler()))
 		g.Go(func() error {
 			return runServer(ctx, "mcp-plain", cfg.Server.MCP.Plain.Listen, handler, logger)
 		})
@@ -280,7 +305,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 			ValidateToken:       authConfig.ValidateToken,
 			Logger:              logger,
 		})
-		handler := oauthListenerHandler(discoveryCfg, authServer, newMCPHandler(), oauthAuth)
+		handler := reqtrace.Middleware(logger, "mcp-oauth", dumpHTTP)(oauthListenerHandler(discoveryCfg, authServer, newMCPHandler(), oauthAuth))
 		g.Go(func() error {
 			return runServer(ctx, "mcp-oauth", cfg.Server.MCP.OAuth.Listen, handler, logger)
 		})
@@ -302,12 +327,31 @@ func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, 
 	mux.Handle("/ws/ui", webAuth.MiddlewareAllowQueryToken(authHandler.RequireSession(wsMgr)))
 	mux.Handle("/auth/", authHandler)
 	mux.Handle("/git/", git.BasicAuthMiddleware(validateToken)(gitHTTP))
+
+	frontendFS, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		mux.Handle("/", http.NotFoundHandler())
+	} else {
+		fileServer := http.FileServer(http.FS(frontendFS))
+		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := strings.TrimPrefix(r.URL.Path, "/")
+			if path == "" {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+			if _, ferr := frontendFS.Open(path); ferr != nil {
+				r.URL.Path = "/"
+			}
+			fileServer.ServeHTTP(w, r)
+		}))
+	}
+
 	return authHandler.Middleware(mux)
 }
 
 // setupMCPServer builds the MCP server with GitYard's tool surface: server info,
 // project/repo management (create_project, list_projects).
-func setupMCPServer(cfg *Config, gitStore *git.Store, logger *slog.Logger) *mcp.Server {
+func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, logger *slog.Logger) *mcp.Server {
 	mcpServer := mcp.NewServer(
 		&mcp.Implementation{Name: "gityard", Version: version},
 		&mcp.ServerOptions{Logger: logger},
@@ -355,7 +399,9 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, logger *slog.Logger) *mcp.
 		return nil, listProjectsOutput{Projects: projects}, nil
 	})
 
-	registerPRTools(mcpServer, gitStore)
+	registerPRTools(mcpServer, gitStore, sc)
+	registerRepoTools(mcpServer, gitStore)
+	registerSeedTools(mcpServer, gitStore, sc.vault)
 
 	return mcpServer
 }
@@ -400,6 +446,89 @@ func oauthListenerHandler(discoveryCfg oauth.DiscoveryConfig, authServer *oauth.
 	}
 	mux.Handle("/", authenticator.Middleware(mcpHandler))
 	return mux
+}
+
+// logDestination wraps an io.Writer with an optional Close method.
+type logDestination struct {
+	io.Writer
+	closer io.Closer
+}
+
+func (d *logDestination) Close() error {
+	if d.closer != nil {
+		return d.closer.Close()
+	}
+	return nil
+}
+
+// buildLogger constructs the slog.Logger from config, returning the destination
+// (which must be closed on shutdown) and the logger.
+func buildLogger(cfg LogConfig) (*logDestination, *slog.Logger, error) {
+	var lvl slog.Level
+	switch strings.ToLower(strings.TrimSpace(cfg.Level)) {
+	case "", "info":
+		lvl = slog.LevelInfo
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		return nil, nil, fmt.Errorf("invalid log level %q", cfg.Level)
+	}
+
+	var w io.Writer
+	dest := &logDestination{}
+	switch strings.ToLower(strings.TrimSpace(cfg.Output)) {
+	case "", "stderr":
+		w = os.Stderr
+	case "file":
+		if cfg.File.Path == "" {
+			return nil, nil, fmt.Errorf("server.log.file.path is required when output is \"file\"")
+		}
+		dir := filepath.Dir(cfg.File.Path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, nil, fmt.Errorf("create log dir %q: %w", dir, err)
+		}
+		maxSize := cfg.File.MaxSizeMB
+		if maxSize <= 0 {
+			maxSize = 100
+		}
+		maxBackups := cfg.File.MaxBackups
+		if maxBackups <= 0 {
+			maxBackups = 7
+		}
+		maxAge := cfg.File.MaxAgeDays
+		if maxAge <= 0 {
+			maxAge = 30
+		}
+		lj := &lumberjack.Logger{
+			Filename:   cfg.File.Path,
+			MaxSize:    maxSize,
+			MaxBackups: maxBackups,
+			MaxAge:     maxAge,
+			Compress:   cfg.File.Compress,
+		}
+		w = lj
+		dest.closer = lj
+	default:
+		return nil, nil, fmt.Errorf("invalid log output %q", cfg.Output)
+	}
+	dest.Writer = w
+
+	opts := &slog.HandlerOptions{Level: lvl}
+	var h slog.Handler
+	switch strings.ToLower(strings.TrimSpace(cfg.Format)) {
+	case "", "text":
+		h = slog.NewTextHandler(w, opts)
+	case "json":
+		h = slog.NewJSONHandler(w, opts)
+	default:
+		return nil, nil, fmt.Errorf("invalid log format %q", cfg.Format)
+	}
+
+	return dest, slog.New(h), nil
 }
 
 // runServer runs one HTTP listener until ctx is cancelled, then shuts it down

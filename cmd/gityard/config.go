@@ -20,13 +20,14 @@ type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	Storage  StorageConfig  `yaml:"storage"`
 	Identity IdentityConfig `yaml:"identity"`
-	OAuth    OAuthConfig    `yaml:"oauth"`
 }
 
 type ServerConfig struct {
-	HTTP HTTPConfig `yaml:"http"`
-	MCP  MCPConfig  `yaml:"mcp"`
-	Auth AuthConfig `yaml:"auth"`
+	HTTP  HTTPConfig  `yaml:"http"`
+	MCP   MCPConfig   `yaml:"mcp"`
+	Auth  AuthConfig  `yaml:"auth"`
+	Log   LogConfig   `yaml:"log"`
+	Debug DebugConfig `yaml:"debug"`
 }
 
 type HTTPConfig struct {
@@ -50,8 +51,9 @@ type MCPPlainConfig struct {
 // MCPOAuthConfig is the OAuth (external) MCP transport. Its PRESENCE (a non-empty
 // listen) is what enables the OAuth authorization server, mirroring Shoka's B-50.
 type MCPOAuthConfig struct {
-	Listen      string `yaml:"listen"`
-	ExternalURL string `yaml:"external_url"`
+	Listen           string `yaml:"listen"`
+	ExternalURL      string `yaml:"external_url"`
+	RegistrationMode string `yaml:"registration_mode"`
 }
 
 type AuthConfig struct {
@@ -91,12 +93,32 @@ type UserIdentity struct {
 	Email string `yaml:"email"`
 }
 
-// OAuthConfig holds the token lifetimes for the authorization server. Only consulted
-// when the OAuth transport is enabled (server.mcp.oauth.listen set).
-type OAuthConfig struct {
-	AccessTokenTTL       Duration `yaml:"access_token_ttl"`
-	RefreshTokenTTL      Duration `yaml:"refresh_token_ttl"`
-	AuthorizationCodeTTL Duration `yaml:"authorization_code_ttl"`
+// LogConfig configures structured server logging. Matches Shoka's server.log.* keys.
+type LogConfig struct {
+	Level  string        `yaml:"level"`
+	Format string        `yaml:"format"`
+	Output string        `yaml:"output"`
+	File   LogFileConfig `yaml:"file"`
+}
+
+// LogFileConfig configures the bounded file log destination (lumberjack-backed).
+type LogFileConfig struct {
+	Path       string `yaml:"path"`
+	MaxSizeMB  int    `yaml:"max_size_mb"`
+	MaxBackups int    `yaml:"max_backups"`
+	MaxAgeDays int    `yaml:"max_age_days"`
+	Compress   bool   `yaml:"compress"`
+	RotateDaily *bool `yaml:"rotate_daily"`
+}
+
+// RotateDailyEnabled returns the effective rotate_daily value (default true).
+func (f LogFileConfig) RotateDailyEnabled() bool {
+	return f.RotateDaily == nil || *f.RotateDaily
+}
+
+// DebugConfig gates verbose, operator-only diagnostics. Matches Shoka's server.debug.*.
+type DebugConfig struct {
+	DumpHTTP bool `yaml:"dump_http"`
 }
 
 // Duration is a YAML-friendly time.Duration that accepts Go duration strings
@@ -129,6 +151,15 @@ func (d Duration) Or(fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(d)
+}
+
+// RegistrationModeOrDefault returns the effective registration posture, mapping an
+// empty value to "cimd" (matching Shoka's default).
+func (o MCPOAuthConfig) RegistrationModeOrDefault() string {
+	if o.RegistrationMode == "" {
+		return "cimd"
+	}
+	return o.RegistrationMode
 }
 
 // OAuthEnabled reports whether the OAuth MCP transport (and thus the authorization
@@ -167,6 +198,30 @@ func (c *Config) normalize() error {
 	}
 	if c.Server.MCP.Plain.Listen == "" && c.Server.MCP.OAuth.Listen == "" {
 		return fmt.Errorf("at least one MCP transport must be configured (server.mcp.plain.listen or server.mcp.oauth.listen)")
+	}
+	switch c.Server.Log.Level {
+	case "", "error", "warn", "info", "debug":
+	default:
+		return fmt.Errorf("server.log.level must be one of error|warn|info|debug, got %q", c.Server.Log.Level)
+	}
+	switch c.Server.Log.Format {
+	case "", "text", "json":
+	default:
+		return fmt.Errorf("server.log.format must be one of text|json, got %q", c.Server.Log.Format)
+	}
+	switch c.Server.Log.Output {
+	case "", "stderr":
+	case "file":
+		if c.Server.Log.File.Path == "" {
+			return fmt.Errorf("server.log.file.path is required when server.log.output is \"file\"")
+		}
+	default:
+		return fmt.Errorf("server.log.output must be one of stderr|file, got %q", c.Server.Log.Output)
+	}
+	switch c.Server.MCP.OAuth.RegistrationMode {
+	case "", "cimd", "dcr", "confidential":
+	default:
+		return fmt.Errorf("server.mcp.oauth.registration_mode must be one of cimd|dcr|confidential, got %q", c.Server.MCP.OAuth.RegistrationMode)
 	}
 	return nil
 }

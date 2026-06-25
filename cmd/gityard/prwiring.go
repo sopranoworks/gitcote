@@ -242,7 +242,7 @@ func parsePushOpts(opts []string) map[string]string {
 }
 
 // registerPRTools registers the PR MCP tools.
-func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store) {
+func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_pull_requests",
 		Description: "List pull requests for a repository, optionally filtered by state (open/approved/merged/closed).",
@@ -372,6 +372,9 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store) {
 		// Invalidate mergeable status on other PRs targeting the same branch.
 		invalidateApprovalsForPush(gitStore, slog.Default(), in.Namespace, in.ProjectName)
 
+		// On-merge push: if configured, push target branch to seed asynchronously.
+		go triggerOnMergePush(sc, in.Namespace, in.ProjectName, p.TargetBranch)
+
 		return nil, mergePROutput{Number: p.Number, State: string(p.State), MergeCommit: mergeHash.String()}, nil
 	})
 
@@ -474,3 +477,4 @@ type prDiffOutput struct {
 type prFilesOutput struct {
 	Files []git.FileChange `json:"files"`
 }
+

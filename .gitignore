@@ -7,3 +7,6 @@
 # Local runtime config and data
 /gityard.yaml
 /data/
+
+# Frontend
+web/node_modules/

@@ -1,0 +1,41 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 1rem;
+  background: rgba(227, 179, 65, 0.12);
+  border-bottom: 1px solid rgba(227, 179, 65, 0.3);
+  font-size: 0.85rem;
+}
+
+.text {
+  color: var(--c-warn, #e3b341);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.input {
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--c-border, #2a2f3a);
+  background: var(--c-bg-elev, #171a21);
+  color: var(--c-text, #e6e9ef);
+  font-size: 0.82rem;
+  width: 160px;
+}
+
+.btn {
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid rgba(227, 179, 65, 0.4);
+  background: rgba(227, 179, 65, 0.18);
+  color: var(--c-warn, #e3b341);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
