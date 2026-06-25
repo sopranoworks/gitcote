@@ -7,9 +7,13 @@
 }
 
 html,
-body {
+body,
+#root {
+  height: 100%;
   margin: 0;
-  padding: 0;
+}
+
+body {
   font-family: var(--font-ui);
   font-size: var(--fs-md);
   background: var(--c-bg);

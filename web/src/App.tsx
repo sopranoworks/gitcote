@@ -15,6 +15,8 @@ import {
 } from '@shoka/web-core'
 import { SshKeySection } from './components/SshKeySection'
 import { SeedConfigSection } from './components/SeedConfigSection'
+import { SshKeysPage } from './components/SshKeysPage'
+import { ResumeBanner } from './components/ResumeBanner'
 
 const SettingsPage = lazy(() =>
   import('@shoka/web-core/pages/SettingsPage').then((m) => ({
@@ -22,10 +24,19 @@ const SettingsPage = lazy(() =>
   })),
 )
 
-const extraSettingsItems: SettingsItem[] = []
+const extraSettingsItems: SettingsItem[] = [
+  {
+    id: 'sshkeys',
+    label: 'SSH Keys',
+    visible: (v) => v.isSuperUser || v.managesAnyNamespace,
+    component: SshKeysPage,
+    deniedBody: 'You do not have permission to manage SSH keys.',
+  },
+]
 
 const coreConfig: CoreScreensConfig = {
   extraSettingsItems,
+  hiddenSettingsItemIds: ['librarian'],
   renderNamespaceSections: (namespace: string) => (
     <SshKeySection namespace={namespace} />
   ),
@@ -45,6 +56,7 @@ function SettingsLazy() {
 const rootRoute = createRootRoute({
   component: () => (
     <Shell>
+      <ResumeBanner />
       <Outlet />
     </Shell>
   ),
