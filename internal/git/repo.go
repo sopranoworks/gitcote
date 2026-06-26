@@ -13,6 +13,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/client"
 )
 
 // Store manages Git repositories under a base directory using Shoka's
@@ -127,6 +128,35 @@ func (s *Store) CloneRepo(namespace, project, cloneURL string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("git clone: %w", err)
+	}
+	return nil
+}
+
+// CloneRepoSSH clones an SSH remote URL using the provided private key PEM.
+func (s *Store) CloneRepoSSH(namespace, project, cloneURL string, privateKeyPEM []byte) error {
+	projPath, err := s.ProjectPath(namespace, project)
+	if err != nil {
+		return err
+	}
+	gitDir := filepath.Join(projPath, ".git")
+	if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); err == nil {
+		return fmt.Errorf("repository %s/%s already exists", namespace, project)
+	}
+	if err := os.MkdirAll(filepath.Dir(projPath), 0o755); err != nil {
+		return fmt.Errorf("create namespace directory: %w", err)
+	}
+
+	sshAuth, err := sshAuthFromPEM(privateKeyPEM)
+	if err != nil {
+		return err
+	}
+
+	_, err = gogit.PlainClone(projPath, &gogit.CloneOptions{
+		URL:           cloneURL,
+		ClientOptions: []client.Option{client.WithSSHAuth(sshAuth)},
+	})
+	if err != nil {
+		return fmt.Errorf("git clone (SSH): %w", err)
 	}
 	return nil
 }

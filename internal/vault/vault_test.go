@@ -1,9 +1,14 @@
 package vault_test
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/sopranoworks/gityard/internal/vault"
 )
@@ -249,5 +254,86 @@ func TestGetKey(t *testing.T) {
 	_, err = v.GetKey("ns", "nope")
 	if err == nil {
 		t.Error("expected error for non-existent key")
+	}
+}
+
+func TestImportKey(t *testing.T) {
+	v := openTestVault(t)
+	if err := v.Unlock("testpassword"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, err := gossh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemData := pem.EncodeToMemory(block)
+
+	pubStr, fp, err := v.ImportKey("ns", "imported", "test@test.com", pemData)
+	if err != nil {
+		t.Fatalf("ImportKey: %v", err)
+	}
+	if pubStr == "" {
+		t.Error("public key string is empty")
+	}
+	if fp == "" {
+		t.Error("fingerprint is empty")
+	}
+	if !strings.HasPrefix(fp, "SHA256:") {
+		t.Errorf("fingerprint should start with SHA256:, got %q", fp)
+	}
+
+	keys, _ := v.ListKeys("ns")
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if keys[0].Name != "imported" {
+		t.Errorf("name = %q, want imported", keys[0].Name)
+	}
+
+	decrypted, err := v.DecryptPrivateKey("ns", "imported")
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if string(decrypted) != string(pemData) {
+		t.Error("decrypted key does not match imported key")
+	}
+}
+
+func TestImportKey_LockedVault(t *testing.T) {
+	v := openTestVault(t)
+	_, _, err := v.ImportKey("ns", "test", "test@test.com", []byte("fake"))
+	if err == nil {
+		t.Fatal("expected error for locked vault")
+	}
+}
+
+func TestImportKey_InvalidPEM(t *testing.T) {
+	v := openTestVault(t)
+	if err := v.Unlock("testpassword"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := v.ImportKey("ns", "bad", "test@test.com", []byte("not a key"))
+	if err == nil {
+		t.Fatal("expected error for invalid PEM")
+	}
+}
+
+func TestImportKey_Duplicate(t *testing.T) {
+	v := openTestVault(t)
+	if err := v.Unlock("testpassword"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	block, _ := gossh.MarshalPrivateKey(priv, "")
+	pemData := pem.EncodeToMemory(block)
+
+	if _, _, err := v.ImportKey("ns", "dup", "test@test.com", pemData); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := v.ImportKey("ns", "dup", "test@test.com", pemData); err == nil {
+		t.Fatal("expected duplicate error")
 	}
 }

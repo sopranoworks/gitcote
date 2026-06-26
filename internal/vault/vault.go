@@ -238,6 +238,60 @@ func (v *Vault) GenerateKey(namespace, name, createdBy string) (string, error) {
 	return pubKeyStr, nil
 }
 
+// ImportKey imports an existing PEM-encoded private key into the vault.
+func (v *Vault) ImportKey(namespace, name, createdBy string, privateKeyPEM []byte) (pubKeyStr, fingerprint string, err error) {
+	if v.State() != VaultUnlocked {
+		return "", "", ErrLocked
+	}
+
+	signer, serr := gossh.ParsePrivateKey(privateKeyPEM)
+	if serr != nil {
+		return "", "", fmt.Errorf("invalid private key: %w", serr)
+	}
+
+	sshPub := signer.PublicKey()
+	pubKeyStr = string(gossh.MarshalAuthorizedKey(sshPub))
+	fingerprint = gossh.FingerprintSHA256(sshPub)
+
+	algo := sshPub.Type()
+
+	encrypted, eerr := v.encrypt(privateKeyPEM)
+	if eerr != nil {
+		return "", "", fmt.Errorf("encrypt private key: %w", eerr)
+	}
+
+	record := SSHKey{
+		Name:             name,
+		Namespace:        namespace,
+		Algorithm:        algo,
+		EncryptedPrivate: encrypted,
+		PublicKey:        pubKeyStr,
+		Fingerprint:      fingerprint,
+		CreatedAt:        time.Now().UTC(),
+		CreatedBy:        createdBy,
+	}
+
+	err = v.db.Update(func(tx *bolt.Tx) error {
+		kb := tx.Bucket(bucketKeys)
+		nsb, berr := kb.CreateBucketIfNotExists([]byte(namespace))
+		if berr != nil {
+			return berr
+		}
+		if nsb.Get([]byte(name)) != nil {
+			return ErrDuplicate
+		}
+		data, jerr := json.Marshal(record)
+		if jerr != nil {
+			return jerr
+		}
+		return nsb.Put([]byte(name), data)
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return pubKeyStr, fingerprint, nil
+}
+
 func (v *Vault) ListKeys(namespace string) ([]SSHKeyInfo, error) {
 	var keys []SSHKeyInfo
 	err := v.db.View(func(tx *bolt.Tx) error {

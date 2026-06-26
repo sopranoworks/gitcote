@@ -66,6 +66,14 @@ export function seedKeyGenerate(
   return wsClient().request('SEED_KEY_GENERATE', { namespace, name })
 }
 
+export function seedKeyImport(
+  namespace: string,
+  name: string,
+  privateKeyPem: string,
+): Promise<{ publicKey: string; fingerprint: string }> {
+  return wsClient().request('SEED_KEY_IMPORT', { namespace, name, privateKeyPem })
+}
+
 export function seedKeyList(
   namespace: string,
 ): Promise<{ keys: SSHKeyInfo[] }> {

@@ -441,11 +441,21 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStor
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "create_project",
-		Description: "Create a new bare Git repository under a namespace. Optionally clone from a seed URL.",
+		Description: "Create a new bare Git repository under a namespace. Optionally clone from a seed URL (HTTP or SSH). SSH clone uses the namespace's deploy key.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, createProjectOutput, error) {
 		if in.CloneURL != "" {
-			if err := gitStore.CloneRepo(in.Namespace, in.ProjectName, in.CloneURL); err != nil {
-				return nil, createProjectOutput{}, fmt.Errorf("clone: %w", err)
+			if isSSHURL(in.CloneURL) {
+				pemData, kerr := resolveDeployKey(sc, in.Namespace, in.KeyName)
+				if kerr != nil {
+					return nil, createProjectOutput{}, kerr
+				}
+				if err := gitStore.CloneRepoSSH(in.Namespace, in.ProjectName, in.CloneURL, pemData); err != nil {
+					return nil, createProjectOutput{}, fmt.Errorf("clone (SSH): %w", err)
+				}
+			} else {
+				if err := gitStore.CloneRepo(in.Namespace, in.ProjectName, in.CloneURL); err != nil {
+					return nil, createProjectOutput{}, fmt.Errorf("clone: %w", err)
+				}
 			}
 		} else {
 			if err := gitStore.CreateRepo(in.Namespace, in.ProjectName); err != nil {
@@ -489,7 +499,29 @@ type serverInfoOutput struct {
 type createProjectInput struct {
 	Namespace   string `json:"namespace" jsonschema:"the namespace (defaults to 'default' if empty)"`
 	ProjectName string `json:"project_name" jsonschema:"required,the project name ([a-zA-Z0-9_-]+)"`
-	CloneURL    string `json:"clone_url,omitempty" jsonschema:"optional seed URL to clone from"`
+	CloneURL    string `json:"clone_url,omitempty" jsonschema:"optional seed URL to clone from (HTTP or SSH)"`
+	KeyName     string `json:"key_name,omitempty" jsonschema:"deploy key name for SSH clone (uses first key if omitted)"`
+}
+
+func isSSHURL(u string) bool {
+	return strings.HasPrefix(u, "git@") || strings.HasPrefix(u, "ssh://")
+}
+
+func resolveDeployKey(sc *seedContext, namespace, keyName string) ([]byte, error) {
+	if sc.vault.State() != vault.VaultUnlocked {
+		return nil, fmt.Errorf("vault is locked — resume required for SSH clone")
+	}
+	if keyName != "" {
+		return sc.vault.DecryptPrivateKey(namespace, keyName)
+	}
+	keys, err := sc.vault.ListKeys(namespace)
+	if err != nil {
+		return nil, fmt.Errorf("list deploy keys: %w", err)
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no deploy keys in namespace %q — import or generate one first", namespace)
+	}
+	return sc.vault.DecryptPrivateKey(namespace, keys[0].Name)
 }
 
 type createProjectOutput struct {

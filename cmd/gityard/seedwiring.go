@@ -22,6 +22,7 @@ const (
 	MsgSeedConfigGet uiws.MessageType = "SEED_CONFIG_GET"
 	MsgSeedConfigSet uiws.MessageType = "SEED_CONFIG_SET"
 	MsgSeedKeyGen    uiws.MessageType = "SEED_KEY_GENERATE"
+	MsgSeedKeyImport uiws.MessageType = "SEED_KEY_IMPORT"
 	MsgSeedKeyList   uiws.MessageType = "SEED_KEY_LIST"
 	MsgSeedKeyDelete uiws.MessageType = "SEED_KEY_DELETE"
 	MsgSeedTest      uiws.MessageType = "SEED_TEST"
@@ -36,6 +37,7 @@ var SeedLevels = map[uiws.MessageType]uiws.Op{
 	MsgSeedConfigGet: {Level: authz.LevelRead, Global: false},
 	MsgSeedConfigSet: {Level: authz.LevelAdmin, Global: false},
 	MsgSeedKeyGen:    {Level: authz.LevelAdmin, Global: false},
+	MsgSeedKeyImport: {Level: authz.LevelAdmin, Global: false},
 	MsgSeedKeyList:   {Level: authz.LevelRead, Global: false},
 	MsgSeedKeyDelete: {Level: authz.LevelAdmin, Global: false},
 	MsgSeedTest:      {Level: authz.LevelAdmin, Global: false},
@@ -61,6 +63,8 @@ func seedDispatch(c *uiws.Client, sc *seedContext, msgType uiws.MessageType, pay
 		handleSeedConfigSet(c, sc.gitStore, payload)
 	case MsgSeedKeyGen:
 		handleSeedKeyGenerate(c, sc, payload)
+	case MsgSeedKeyImport:
+		handleSeedKeyImport(c, sc, payload)
 	case MsgSeedKeyList:
 		handleSeedKeyList(c, sc.vault, payload)
 	case MsgSeedKeyDelete:
@@ -184,6 +188,38 @@ func handleSeedKeyGenerate(c *uiws.Client, sc *seedContext, payload json.RawMess
 		return
 	}
 	c.SendResponse(MsgSeedKeyGen, map[string]string{"publicKey": pubKey})
+}
+
+type seedKeyImportPayload struct {
+	Namespace     string `json:"namespace"`
+	Name          string `json:"name"`
+	PrivateKeyPEM string `json:"privateKeyPem"`
+}
+
+func handleSeedKeyImport(c *uiws.Client, sc *seedContext, payload json.RawMessage) {
+	var p seedKeyImportPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	if p.PrivateKeyPEM == "" {
+		c.SendError("privateKeyPem is required")
+		return
+	}
+	principal := c.Principal()
+	createdBy := principal.Email
+	if createdBy == "" {
+		createdBy = principal.Name
+	}
+	pubKey, fingerprint, err := sc.vault.ImportKey(p.Namespace, p.Name, createdBy, []byte(p.PrivateKeyPEM))
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	c.SendResponse(MsgSeedKeyImport, map[string]string{
+		"publicKey":   pubKey,
+		"fingerprint": fingerprint,
+	})
 }
 
 func handleSeedKeyList(c *uiws.Client, v *vault.Vault, payload json.RawMessage) {

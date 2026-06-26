@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useToast, wsClient } from '@shoka/web-core'
-import { seedKeyGenerate, seedKeyList, seedKeyDelete, type SSHKeyInfo } from '../ops/seedOps'
+import { seedKeyGenerate, seedKeyImport, seedKeyList, seedKeyDelete, type SSHKeyInfo } from '../ops/seedOps'
 import styles from './SshKeysPage.module.css'
 
 interface NamespaceKeys {
@@ -40,6 +40,12 @@ export function SshKeysPage() {
   const [generating, setGenerating] = useState(false)
   const [showPubKey, setShowPubKey] = useState<string | null>(null)
 
+  const [impNs, setImpNs] = useState('')
+  const [impName, setImpName] = useState('')
+  const [impPem, setImpPem] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [showImportResult, setShowImportResult] = useState<{ publicKey: string; fingerprint: string } | null>(null)
+
   async function handleGenerate() {
     if (!genNs || !genName.trim()) return
     setGenerating(true)
@@ -53,6 +59,23 @@ export function SshKeysPage() {
       toast({ level: 'warn', text: e instanceof Error ? e.message : 'Failed to generate key' })
     } finally {
       setGenerating(false)
+    }
+  }
+
+  async function handleImport() {
+    if (!impNs || !impName.trim() || !impPem.trim()) return
+    setImporting(true)
+    try {
+      const result = await seedKeyImport(impNs, impName.trim(), impPem.trim())
+      setShowImportResult(result)
+      setImpName('')
+      setImpPem('')
+      void qc.invalidateQueries({ queryKey: ['ssh-keys-all'] })
+      void qc.invalidateQueries({ queryKey: ['seed-keys'] })
+    } catch (e) {
+      toast({ level: 'warn', text: e instanceof Error ? e.message : 'Failed to import key' })
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -147,6 +170,54 @@ export function SshKeysPage() {
             <p className={styles.muted}>Public key (copy and add as a deploy key on your seed host):</p>
             <pre className={styles.pubKey}>{showPubKey}</pre>
             <button className={styles.btn} onClick={() => setShowPubKey(null)}>Dismiss</button>
+          </div>
+        )}
+      </section>
+
+      <section className={styles.genSection}>
+        <h2 className={styles.nsName}>Import existing key</h2>
+        <p className={styles.muted}>
+          Paste a PEM-encoded private key (e.g. a deploy key already registered at GitHub/GitLab).
+          The key is encrypted at rest with the vault master key.
+        </p>
+        <div className={styles.genRow}>
+          <select
+            className={styles.select}
+            value={impNs}
+            onChange={(e) => setImpNs(e.target.value)}
+          >
+            <option value="">— namespace —</option>
+            {namespaces.map((ns) => (
+              <option key={ns} value={ns}>{ns}</option>
+            ))}
+          </select>
+          <input
+            className={styles.input}
+            type="text"
+            placeholder="Key name"
+            value={impName}
+            onChange={(e) => setImpName(e.target.value)}
+          />
+        </div>
+        <textarea
+          className={styles.input}
+          style={{ width: '100%', minHeight: '6rem', marginTop: '0.5rem', fontFamily: 'var(--font-mono, monospace)', fontSize: '0.78rem' }}
+          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
+          value={impPem}
+          onChange={(e) => setImpPem(e.target.value)}
+        />
+        <div className={styles.genRow} style={{ marginTop: '0.5rem' }}>
+          <button className={styles.btn} onClick={() => void handleImport()} disabled={importing || !impNs || !impName.trim() || !impPem.trim()}>
+            {importing ? 'Importing…' : 'Import Key'}
+          </button>
+        </div>
+
+        {showImportResult && (
+          <div className={styles.pubKeyBox}>
+            <p className={styles.muted}>Imported — derived public key:</p>
+            <pre className={styles.pubKey}>{showImportResult.publicKey}</pre>
+            <p className={styles.muted} style={{ fontSize: '0.78rem' }}>Fingerprint: {showImportResult.fingerprint}</p>
+            <button className={styles.btn} onClick={() => setShowImportResult(null)}>Dismiss</button>
           </div>
         )}
       </section>
