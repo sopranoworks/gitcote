@@ -9,6 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gityard/internal/sshkeys"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 )
@@ -34,12 +35,13 @@ type wsManager struct {
 
 	levels   map[uiws.MessageType]uiws.Op
 	superOp  map[uiws.MessageType]bool
-	seedCtx  *seedContext
-	gitStore *git.Store
+	seedCtx     *seedContext
+	gitStore    *git.Store
+	sshKeyStore *sshkeys.Store
 }
 
-func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, gitStore *git.Store, logger *slog.Logger) *wsManager {
-	levels := make(map[uiws.MessageType]uiws.Op, len(uiws.CoreLevels)+len(SeedLevels)+len(NsLevels)+len(ContentLevels))
+func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, gitStore *git.Store, sshKeyStore *sshkeys.Store, logger *slog.Logger) *wsManager {
+	levels := make(map[uiws.MessageType]uiws.Op, len(uiws.CoreLevels)+len(SeedLevels)+len(NsLevels)+len(ContentLevels)+len(UserSSHKeyLevels))
 	for k, v := range uiws.CoreLevels {
 		levels[k] = v
 	}
@@ -52,17 +54,21 @@ func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) boo
 	for k, v := range ContentLevels {
 		levels[k] = v
 	}
+	for k, v := range UserSSHKeyLevels {
+		levels[k] = v
+	}
 
 	return &wsManager{
 		CoreHandlers: core,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: originAllowed,
 		},
-		logger:   logger,
-		levels:   levels,
-		superOp:  map[uiws.MessageType]bool{},
-		seedCtx:  sc,
-		gitStore: gitStore,
+		logger:      logger,
+		levels:      levels,
+		superOp:     map[uiws.MessageType]bool{},
+		seedCtx:     sc,
+		gitStore:    gitStore,
+		sshKeyStore: sshKeyStore,
 	}
 }
 
@@ -105,6 +111,10 @@ func (m *wsManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if contentDispatch(client, m.gitStore, wsMsg.Type, wsMsg.Payload) {
+			continue
+		}
+
+		if sshKeyDispatch(client, m.sshKeyStore, wsMsg.Type, wsMsg.Payload) {
 			continue
 		}
 

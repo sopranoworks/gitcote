@@ -26,6 +26,14 @@ server:
     # trusted_proxies:
     #   - "172.16.0.0/12"
 
+  # Inbound SSH server for git transport. Disabled by default. When enabled,
+  # human coders use SSH (ssh-agent, ~/.ssh/id_ed25519) as the primary git
+  # access method: git clone git@host:ns/proj.git. Host key is auto-generated
+  # on first start (Ed25519). Users register their public keys via WebUI.
+  # ssh:
+  #   listen: ":2222"
+  #   host_key_path: "ssh_host_ed25519_key"  # relative to storage.base_dir
+
   # MCP endpoint (Streamable HTTP, served at /mcp). At least one transport must be set.
   mcp:
     # Plain transport — normal/internal use.

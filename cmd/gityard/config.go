@@ -24,10 +24,16 @@ type Config struct {
 
 type ServerConfig struct {
 	HTTP  HTTPConfig  `yaml:"http"`
+	SSH   SSHConfig   `yaml:"ssh"`
 	MCP   MCPConfig   `yaml:"mcp"`
 	Auth  AuthConfig  `yaml:"auth"`
 	Log   LogConfig   `yaml:"log"`
 	Debug DebugConfig `yaml:"debug"`
+}
+
+type SSHConfig struct {
+	Listen      string `yaml:"listen"`
+	HostKeyPath string `yaml:"host_key_path"`
 }
 
 type HTTPConfig struct {

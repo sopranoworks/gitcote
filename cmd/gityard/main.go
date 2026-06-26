@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +24,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gityard/internal/sshd"
+	"github.com/sopranoworks/gityard/internal/sshkeys"
 	"github.com/sopranoworks/gityard/internal/vault"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/authapi"
@@ -239,7 +242,14 @@ func run(cfg *Config, logger *slog.Logger) error {
 			return rec.AccessToken, rec.AccessExpiry, nil
 		}))
 	}
-	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, logger)
+	// ---- User SSH public key store (for inbound SSH auth) ----
+	sshKeyStore, err := sshkeys.Open(filepath.Join(cfg.Storage.BaseDir, "ssh_authorized_keys.db"))
+	if err != nil {
+		return fmt.Errorf("open SSH key store: %w", err)
+	}
+	defer func() { _ = sshKeyStore.Close() }()
+
+	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, logger)
 
 	// ---- MCP server (Git management tools + server info) ----
 	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, logger)
@@ -324,6 +334,35 @@ func run(cfg *Config, logger *slog.Logger) error {
 		handler := reqtrace.Middleware(logger, "mcp-oauth", dumpHTTP)(oauthListenerHandler(discoveryCfg, authServer, newMCPHandler(), oauthAuth))
 		g.Go(func() error {
 			return runServer(ctx, "mcp-oauth", cfg.Server.MCP.OAuth.Listen, handler, logger)
+		})
+	}
+
+	// ---- Inbound SSH server (git transport via SSH keys) ----
+	if cfg.Server.SSH.Listen != "" {
+		hostKeyPath := cfg.Server.SSH.HostKeyPath
+		if hostKeyPath == "" {
+			hostKeyPath = "ssh_host_ed25519_key"
+		}
+		if !filepath.IsAbs(hostKeyPath) {
+			hostKeyPath = filepath.Join(cfg.Storage.BaseDir, hostKeyPath)
+		}
+		sshServer, serr := sshd.NewServer(gitStore, sshKeyStore, hostKeyPath, logger)
+		if serr != nil {
+			return fmt.Errorf("create SSH server: %w", serr)
+		}
+		sshServer.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
+			logger.Info("ssh post-receive",
+				"namespace", namespace, "project", project,
+				"principal", principal.Email, "push_options", pushOpts)
+			handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts)
+		}
+		g.Go(func() error {
+			ln, lerr := net.Listen("tcp", cfg.Server.SSH.Listen)
+			if lerr != nil {
+				return fmt.Errorf("ssh listen: %w", lerr)
+			}
+			logger.Info("starting server", "name", "ssh", "addr", cfg.Server.SSH.Listen)
+			return sshServer.Serve(ctx, ln)
 		})
 	}
 
