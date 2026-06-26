@@ -35,12 +35,13 @@ type wsManager struct {
 
 	levels   map[uiws.MessageType]uiws.Op
 	superOp  map[uiws.MessageType]bool
-	seedCtx     *seedContext
-	gitStore    *git.Store
-	sshKeyStore *sshkeys.Store
+	seedCtx        *seedContext
+	gitStore       *git.Store
+	sshKeyStore    *sshkeys.Store
+	sshListenAddr  string
 }
 
-func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, gitStore *git.Store, sshKeyStore *sshkeys.Store, logger *slog.Logger) *wsManager {
+func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, gitStore *git.Store, sshKeyStore *sshkeys.Store, sshListenAddr string, logger *slog.Logger) *wsManager {
 	levels := make(map[uiws.MessageType]uiws.Op, len(uiws.CoreLevels)+len(SeedLevels)+len(NsLevels)+len(ContentLevels)+len(UserSSHKeyLevels))
 	for k, v := range uiws.CoreLevels {
 		levels[k] = v
@@ -66,9 +67,10 @@ func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) boo
 		logger:      logger,
 		levels:      levels,
 		superOp:     map[uiws.MessageType]bool{},
-		seedCtx:     sc,
-		gitStore:    gitStore,
-		sshKeyStore: sshKeyStore,
+		seedCtx:       sc,
+		gitStore:      gitStore,
+		sshKeyStore:   sshKeyStore,
+		sshListenAddr: sshListenAddr,
 	}
 }
 
@@ -114,7 +116,7 @@ func (m *wsManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if sshKeyDispatch(client, m.sshKeyStore, wsMsg.Type, wsMsg.Payload) {
+		if sshKeyDispatch(client, m.sshKeyStore, m.sshListenAddr, wsMsg.Type, wsMsg.Payload) {
 			continue
 		}
 

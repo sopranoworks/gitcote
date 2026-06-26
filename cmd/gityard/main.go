@@ -249,7 +249,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 	defer func() { _ = sshKeyStore.Close() }()
 
-	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, logger)
+	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, logger)
 
 	// ---- MCP server (Git management tools + server info) ----
 	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, logger)

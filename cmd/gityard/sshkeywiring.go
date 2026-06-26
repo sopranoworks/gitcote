@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net"
+	"strconv"
 
 	"github.com/sopranoworks/gityard/internal/sshkeys"
 	"github.com/sopranoworks/shoka/pkg/authz"
@@ -12,15 +14,17 @@ const (
 	MsgUserSSHKeyList   uiws.MessageType = "USER_SSH_KEY_LIST"
 	MsgUserSSHKeyAdd    uiws.MessageType = "USER_SSH_KEY_ADD"
 	MsgUserSSHKeyDelete uiws.MessageType = "USER_SSH_KEY_DELETE"
+	MsgServerSSHInfo    uiws.MessageType = "SERVER_SSH_INFO"
 )
 
 var UserSSHKeyLevels = map[uiws.MessageType]uiws.Op{
 	MsgUserSSHKeyList:   {Level: authz.LevelRead, Global: true},
 	MsgUserSSHKeyAdd:    {Level: authz.LevelRead, Global: true},
 	MsgUserSSHKeyDelete: {Level: authz.LevelRead, Global: true},
+	MsgServerSSHInfo:    {Level: authz.LevelRead, Global: true},
 }
 
-func sshKeyDispatch(c *uiws.Client, keyStore *sshkeys.Store, msgType uiws.MessageType, payload json.RawMessage) bool {
+func sshKeyDispatch(c *uiws.Client, keyStore *sshkeys.Store, sshListenAddr string, msgType uiws.MessageType, payload json.RawMessage) bool {
 	switch msgType {
 	case MsgUserSSHKeyList:
 		handleUserSSHKeyList(c, keyStore)
@@ -28,6 +32,8 @@ func sshKeyDispatch(c *uiws.Client, keyStore *sshkeys.Store, msgType uiws.Messag
 		handleUserSSHKeyAdd(c, keyStore, payload)
 	case MsgUserSSHKeyDelete:
 		handleUserSSHKeyDelete(c, keyStore, payload)
+	case MsgServerSSHInfo:
+		handleServerSSHInfo(c, sshListenAddr)
 	default:
 		return false
 	}
@@ -99,4 +105,18 @@ func handleUserSSHKeyDelete(c *uiws.Client, keyStore *sshkeys.Store, payload jso
 		return
 	}
 	c.SendResponse(MsgUserSSHKeyDelete, map[string]string{"status": "ok"})
+}
+
+func handleServerSSHInfo(c *uiws.Client, listenAddr string) {
+	if listenAddr == "" {
+		c.SendResponse(MsgServerSSHInfo, map[string]any{"enabled": false})
+		return
+	}
+	_, portStr, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		c.SendResponse(MsgServerSSHInfo, map[string]any{"enabled": false})
+		return
+	}
+	port, _ := strconv.Atoi(portStr)
+	c.SendResponse(MsgServerSSHInfo, map[string]any{"enabled": true, "port": port})
 }

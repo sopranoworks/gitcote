@@ -22,6 +22,7 @@ import {
 import { SshKeySection } from './components/SshKeySection'
 import { SeedConfigSection } from './components/SeedConfigSection'
 import { SshKeysPage } from './components/SshKeysPage'
+import { UserSshKeysSection } from './components/UserSshKeysSection'
 import { ResumeBanner } from './components/ResumeBanner'
 
 function SettingsResumeBanner() {
@@ -38,11 +39,18 @@ const SettingsPage = lazy(() =>
 
 const extraSettingsItems: SettingsItem[] = [
   {
+    id: 'my-ssh-keys',
+    label: 'My SSH Keys',
+    visible: () => true,
+    component: UserSshKeysSection,
+    deniedBody: '',
+  },
+  {
     id: 'sshkeys',
-    label: 'SSH Keys',
+    label: 'Deploy Keys',
     visible: (v) => v.isSuperUser || v.managesAnyNamespace,
     component: SshKeysPage,
-    deniedBody: 'You do not have permission to manage SSH keys.',
+    deniedBody: 'You do not have permission to manage deploy keys.',
   },
 ]
 
