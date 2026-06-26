@@ -19,7 +19,6 @@ import (
 )
 
 func TestParseRefUpdates(t *testing.T) {
-	// Build a minimal receive-pack pkt-line stream with two ref updates.
 	var buf bytes.Buffer
 	line1 := fmt.Sprintf("%s %s refs/heads/main\x00report-status push-options\n",
 		"0000000000000000000000000000000000000000",
@@ -43,28 +42,58 @@ func TestParseRefUpdates(t *testing.T) {
 	}
 }
 
-func TestCheckBranchProtection_RBlockedOnProtected(t *testing.T) {
+func TestIsDefaultBranch(t *testing.T) {
 	baseDir := t.TempDir()
 	store := git.NewStore(baseDir)
 	if err := store.CreateRepo("ns", "proj"); err != nil {
 		t.Fatal(err)
 	}
-	repo, _ := store.OpenRepo("ns", "proj")
 
-	cfg := &git.ProjectConfig{
-		ProtectedBranches: []string{"main", "master"},
-		ForcePush:         "deny",
+	// Empty repo with no HEAD target → falls back to "main".
+	repo, _ := store.OpenRepo("ns", "proj")
+	if !git.IsDefaultBranch(repo, "main") {
+		t.Error("expected main to be default branch (fallback)")
+	}
+	if git.IsDefaultBranch(repo, "feature") {
+		t.Error("expected feature NOT to be default branch")
+	}
+}
+
+func TestCheckBranchProtection_RBlockedOnDefault(t *testing.T) {
+	baseDir := t.TempDir()
+	store := git.NewStore(baseDir)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	handler := git.NewHandler(store, logger)
+	mux := http.NewServeMux()
+	mux.Handle("/", handler)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	if err := store.CreateRepo("ns", "proj"); err != nil {
+		t.Fatal(err)
 	}
 
-	// R-level push to protected branch should be rejected.
+	// Push initial commit to set up HEAD → main.
+	cloneDir := t.TempDir()
+	runGit(t, cloneDir, "clone", ts.URL+"/ns/proj.git", "repo")
+	repoDir := filepath.Join(cloneDir, "repo")
+	os.WriteFile(filepath.Join(repoDir, "init.txt"), []byte("init"), 0o644)
+	runGit(t, repoDir, "add", "init.txt")
+	runGit(t, repoDir, "commit", "-m", "init")
+	runGit(t, repoDir, "push", "-u", "origin", "HEAD:refs/heads/main")
+
+	// Now check against the repo with a real HEAD.
+	repo, _ := store.OpenRepo("ns", "proj")
+
 	updates := []git.RefUpdate{{
 		OldHash: testZeroHash(),
 		NewHash: testFakeHash("aa"),
 		RefName: "refs/heads/main",
 	}}
-	err := git.CheckBranchProtection(repo, updates, cfg, authz.LevelRead, nil)
+	err := git.CheckBranchProtection(repo, updates, authz.LevelRead, nil)
 	if err == nil {
-		t.Fatal("expected error for R-level push to protected branch")
+		t.Fatal("expected error for R-level push to default branch")
 	}
 	if !strings.Contains(err.Error(), "protected branch") {
 		t.Errorf("unexpected error: %v", err)
@@ -79,20 +108,17 @@ func TestCheckBranchProtection_RAllowedOnFeature(t *testing.T) {
 	}
 	repo, _ := store.OpenRepo("ns", "proj")
 
-	cfg := git.DefaultProjectConfig()
-
-	// R-level push to feature branch should succeed.
 	updates := []git.RefUpdate{{
 		OldHash: testZeroHash(),
 		NewHash: testFakeHash("bb"),
 		RefName: "refs/heads/feature-branch",
 	}}
-	if err := git.CheckBranchProtection(repo, updates, cfg, authz.LevelRead, nil); err != nil {
+	if err := git.CheckBranchProtection(repo, updates, authz.LevelRead, nil); err != nil {
 		t.Fatalf("R-level push to feature branch should be allowed: %v", err)
 	}
 }
 
-func TestCheckBranchProtection_DeleteProtected(t *testing.T) {
+func TestCheckBranchProtection_DeleteDefault(t *testing.T) {
 	baseDir := t.TempDir()
 	store := git.NewStore(baseDir)
 	if err := store.CreateRepo("ns", "proj"); err != nil {
@@ -100,17 +126,14 @@ func TestCheckBranchProtection_DeleteProtected(t *testing.T) {
 	}
 	repo, _ := store.OpenRepo("ns", "proj")
 
-	cfg := git.DefaultProjectConfig()
-
-	// Delete of protected branch should be rejected (even for admin).
 	updates := []git.RefUpdate{{
 		OldHash: testFakeHash("aa"),
 		NewHash: testZeroHash(),
 		RefName: "refs/heads/main",
 	}}
-	err := git.CheckBranchProtection(repo, updates, cfg, authz.LevelAdmin, nil)
+	err := git.CheckBranchProtection(repo, updates, authz.LevelAdmin, nil)
 	if err == nil {
-		t.Fatal("expected error for delete of protected branch")
+		t.Fatal("expected error for delete of default branch")
 	}
 	if !strings.Contains(err.Error(), "cannot delete") {
 		t.Errorf("unexpected error: %v", err)
@@ -125,26 +148,23 @@ func TestCheckBranchProtection_AllowedBranches(t *testing.T) {
 	}
 	repo, _ := store.OpenRepo("ns", "proj")
 
-	cfg := git.DefaultProjectConfig()
 	allowed := []string{"task-42/"}
 
-	// Push to matching prefix should succeed.
 	updates := []git.RefUpdate{{
 		OldHash: testZeroHash(),
 		NewHash: testFakeHash("cc"),
 		RefName: "refs/heads/task-42/impl",
 	}}
-	if err := git.CheckBranchProtection(repo, updates, cfg, authz.LevelRead, allowed); err != nil {
+	if err := git.CheckBranchProtection(repo, updates, authz.LevelRead, allowed); err != nil {
 		t.Fatalf("push to allowed branch should succeed: %v", err)
 	}
 
-	// Push to non-matching prefix should fail.
 	updates = []git.RefUpdate{{
 		OldHash: testZeroHash(),
 		NewHash: testFakeHash("dd"),
 		RefName: "refs/heads/other-branch",
 	}}
-	err := git.CheckBranchProtection(repo, updates, cfg, authz.LevelRead, allowed)
+	err := git.CheckBranchProtection(repo, updates, authz.LevelRead, allowed)
 	if err == nil {
 		t.Fatal("expected error for push to disallowed branch")
 	}
@@ -153,18 +173,28 @@ func TestCheckBranchProtection_AllowedBranches(t *testing.T) {
 	}
 }
 
+func TestMatchesAllowedBranches(t *testing.T) {
+	if !git.MatchesAllowedBranches("task-42/impl", []string{"task-42/"}) {
+		t.Error("task-42/impl should match prefix task-42/")
+	}
+	if !git.MatchesAllowedBranches("task-42/fix", []string{"task-42/"}) {
+		t.Error("task-42/fix should match prefix task-42/")
+	}
+	if git.MatchesAllowedBranches("main", []string{"task-42/"}) {
+		t.Error("main should NOT match prefix task-42/")
+	}
+	if git.MatchesAllowedBranches("other", []string{"task-42/"}) {
+		t.Error("other should NOT match prefix task-42/")
+	}
+}
+
 func TestAllowedBranchesFromExtra(t *testing.T) {
-	// Nil map → nil.
 	if got := git.AllowedBranchesFromExtra(nil); got != nil {
 		t.Errorf("nil map: got %v, want nil", got)
 	}
-
-	// Empty key → nil.
 	if got := git.AllowedBranchesFromExtra(map[string]any{}); got != nil {
 		t.Errorf("empty map: got %v, want nil", got)
 	}
-
-	// Valid list.
 	extra := map[string]any{
 		"allowed_branches": []any{"task-42/", "fix-"},
 	}
@@ -174,32 +204,51 @@ func TestAllowedBranchesFromExtra(t *testing.T) {
 	}
 }
 
-func TestProjectConfig_DefaultAndRoundTrip(t *testing.T) {
-	dir := t.TempDir()
+func TestDeleteBranchRef(t *testing.T) {
+	baseDir := t.TempDir()
+	store := git.NewStore(baseDir)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	// Default when no file exists.
-	cfg, err := git.LoadProjectConfig(dir)
-	if err != nil {
+	handler := git.NewHandler(store, logger)
+	mux := http.NewServeMux()
+	mux.Handle("/", handler)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	if err := store.CreateRepo("ns", "proj"); err != nil {
 		t.Fatal(err)
-	}
-	if len(cfg.ProtectedBranches) != 1 || cfg.ProtectedBranches[0] != "main" {
-		t.Errorf("default protected_branches = %v, want [main]", cfg.ProtectedBranches)
-	}
-	if cfg.ForcePush != "deny" {
-		t.Errorf("default force_push = %q, want deny", cfg.ForcePush)
 	}
 
-	// Save and reload.
-	cfg.ProtectedBranches = []string{"main", "release"}
-	if err := git.SaveProjectConfig(dir, cfg); err != nil {
-		t.Fatal(err)
+	// Push main and feature branch.
+	cloneDir := t.TempDir()
+	runGit(t, cloneDir, "clone", ts.URL+"/ns/proj.git", "repo")
+	repoDir := filepath.Join(cloneDir, "repo")
+	os.WriteFile(filepath.Join(repoDir, "init.txt"), []byte("init"), 0o644)
+	runGit(t, repoDir, "add", "init.txt")
+	runGit(t, repoDir, "commit", "-m", "init")
+	runGit(t, repoDir, "push", "-u", "origin", "HEAD:refs/heads/main")
+	runGit(t, repoDir, "checkout", "-b", "feature")
+	os.WriteFile(filepath.Join(repoDir, "f.txt"), []byte("feature"), 0o644)
+	runGit(t, repoDir, "add", "f.txt")
+	runGit(t, repoDir, "commit", "-m", "feature")
+	runGit(t, repoDir, "push", "-u", "origin", "HEAD:refs/heads/feature")
+
+	repo, _ := store.OpenRepo("ns", "proj")
+	branches, _ := git.ListBranches(repo)
+	if len(branches) != 2 {
+		t.Fatalf("expected 2 branches, got %d: %v", len(branches), branches)
 	}
-	loaded, err := git.LoadProjectConfig(dir)
-	if err != nil {
-		t.Fatal(err)
+
+	if err := git.DeleteBranchRef(repo, "feature"); err != nil {
+		t.Fatalf("DeleteBranchRef: %v", err)
 	}
-	if len(loaded.ProtectedBranches) != 2 || loaded.ProtectedBranches[1] != "release" {
-		t.Errorf("after roundtrip: %v", loaded.ProtectedBranches)
+
+	branches, _ = git.ListBranches(repo)
+	if len(branches) != 1 {
+		t.Fatalf("expected 1 branch after delete, got %d: %v", len(branches), branches)
+	}
+	if branches[0] != "main" {
+		t.Errorf("remaining branch = %q, want main", branches[0])
 	}
 }
 
@@ -210,15 +259,13 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 
 	handler := git.NewHandler(store, logger)
 	handler.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
-		projPath, _ := store.ProjectPath(namespace, project)
-		cfg, _ := git.LoadProjectConfig(projPath)
 		effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
 		allowed := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
 		repo, err := store.OpenRepo(namespace, project)
 		if err != nil {
 			return err
 		}
-		return git.CheckBranchProtection(repo, refUpdates, cfg, effectiveLevel, allowed)
+		return git.CheckBranchProtection(repo, refUpdates, effectiveLevel, allowed)
 	}
 
 	rLevelValidate := func(token string) (auth.Principal, auth.RejectReason, bool) {
@@ -330,14 +377,12 @@ func TestBranchProtection_PRFromRLevel(t *testing.T) {
 	var capturedPushOpts []string
 	handler := git.NewHandler(store, logger)
 	handler.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
-		projPath, _ := store.ProjectPath(namespace, project)
-		cfg, _ := git.LoadProjectConfig(projPath)
 		effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
 		repo, err := store.OpenRepo(namespace, project)
 		if err != nil {
 			return err
 		}
-		return git.CheckBranchProtection(repo, refUpdates, cfg, effectiveLevel, nil)
+		return git.CheckBranchProtection(repo, refUpdates, effectiveLevel, nil)
 	}
 	handler.PostReceive = func(ns, proj string, p auth.Principal, pushOpts []string) {
 		capturedPushOpts = pushOpts
@@ -370,7 +415,6 @@ func TestBranchProtection_PRFromRLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Setup: W-level push initial commit to main.
 	wDir := t.TempDir()
 	wURL := fmt.Sprintf("http://x-token:w-token@%s/ns/proj.git", ts.Listener.Addr().String())
 	runGit(t, wDir, "clone", wURL, "w-repo")
@@ -380,7 +424,6 @@ func TestBranchProtection_PRFromRLevel(t *testing.T) {
 	runGit(t, wRepoDir, "commit", "-m", "init")
 	runGit(t, wRepoDir, "push", "-u", "origin", "HEAD:refs/heads/main")
 
-	// R-level: push to feature branch with PR push options → succeeds.
 	rDir := t.TempDir()
 	rURL := fmt.Sprintf("http://x-token:r-token@%s/ns/proj.git", ts.Listener.Addr().String())
 	runGit(t, rDir, "clone", rURL, "r-repo")

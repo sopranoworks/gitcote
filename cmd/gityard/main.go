@@ -413,7 +413,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStor
 	registerPRTools(mcpServer, gitStore, sc)
 	registerRepoTools(mcpServer, gitStore)
 	registerSeedTools(mcpServer, gitStore, sc.vault)
-	registerTokenTools(mcpServer, oauthStore)
+	registerTokenTools(mcpServer, gitStore, oauthStore)
 
 	return mcpServer
 }

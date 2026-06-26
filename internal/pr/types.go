@@ -41,6 +41,7 @@ type PullRequest struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 	MergedAt      *time.Time `json:"merged_at,omitempty"`
 	ClosedAt      *time.Time `json:"closed_at,omitempty"`
-	ApprovedBy    string     `json:"approved_by,omitempty"`
-	ApprovedAt    *time.Time `json:"approved_at,omitempty"`
+	ApprovedBy          string     `json:"approved_by,omitempty"`
+	ApprovedAt          *time.Time `json:"approved_at,omitempty"`
+	SourceBranchDeleted bool       `json:"source_branch_deleted,omitempty"`
 }

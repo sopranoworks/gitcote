@@ -293,6 +293,10 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		}
 
 		principal, _ := auth.PrincipalFrom(ctx)
+		allowed := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
+		if len(allowed) > 0 && !git.MatchesAllowedBranches(p.TargetBranch, allowed) {
+			return nil, approvePROutput{}, fmt.Errorf("token not permitted to approve PRs targeting %q", p.TargetBranch)
+		}
 		approver := principal.Email
 		if approver == "" {
 			approver = principal.Name
@@ -315,7 +319,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "merge_pull_request",
 		Description: "Merge an approved pull request. Fails if not approved or has conflicts.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in mergePRInput) (*mcp.CallToolResult, mergePROutput, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mergePRInput) (*mcp.CallToolResult, mergePROutput, error) {
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
 			return nil, mergePROutput{}, err
@@ -329,6 +333,12 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		}
 		if p.Mergeable != pr.MergeableClean {
 			return nil, mergePROutput{}, fmt.Errorf("PR #%d is not cleanly mergeable (status: %s)", in.Number, p.Mergeable)
+		}
+
+		principal, _ := auth.PrincipalFrom(ctx)
+		allowed := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
+		if len(allowed) > 0 && !git.MatchesAllowedBranches(p.TargetBranch, allowed) {
+			return nil, mergePROutput{}, fmt.Errorf("token not permitted to merge PRs targeting %q", p.TargetBranch)
 		}
 
 		repo, err := gitStore.OpenRepo(in.Namespace, in.ProjectName)
@@ -369,13 +379,21 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 			return nil, mergePROutput{}, err
 		}
 
+		// Delete source branch after merge.
+		sourceBranchDeleted := false
+		if delErr := git.DeleteBranchRef(repo, p.SourceBranch); delErr == nil {
+			sourceBranchDeleted = true
+		}
+		p.SourceBranchDeleted = sourceBranchDeleted
+		_ = prStore.Update(p)
+
 		// Invalidate mergeable status on other PRs targeting the same branch.
 		invalidateApprovalsForPush(gitStore, slog.Default(), in.Namespace, in.ProjectName)
 
 		// On-merge push: if configured, push target branch to seed asynchronously.
 		go triggerOnMergePush(sc, in.Namespace, in.ProjectName, p.TargetBranch)
 
-		return nil, mergePROutput{Number: p.Number, State: string(p.State), MergeCommit: mergeHash.String()}, nil
+		return nil, mergePROutput{Number: p.Number, State: string(p.State), MergeCommit: mergeHash.String(), SourceBranchDeleted: sourceBranchDeleted}, nil
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
@@ -464,9 +482,10 @@ type mergePRInput struct {
 }
 
 type mergePROutput struct {
-	Number      uint32 `json:"number"`
-	State       string `json:"state"`
-	MergeCommit string `json:"merge_commit"`
+	Number              uint32 `json:"number"`
+	State               string `json:"state"`
+	MergeCommit         string `json:"merge_commit"`
+	SourceBranchDeleted bool   `json:"source_branch_deleted"`
 }
 
 type prDiffOutput struct {

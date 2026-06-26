@@ -15,15 +15,6 @@ import (
 const gityardIssuedClientID = "gityard-issued"
 
 func checkBranchProtection(gitStore *git.Store, namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
-	projPath, err := gitStore.ProjectPath(namespace, project)
-	if err != nil {
-		return fmt.Errorf("resolve project: %w", err)
-	}
-	cfg, err := git.LoadProjectConfig(projPath)
-	if err != nil {
-		return fmt.Errorf("load project config: %w", err)
-	}
-
 	effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
 	allowedBranches := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
 
@@ -32,10 +23,10 @@ func checkBranchProtection(gitStore *git.Store, namespace, project string, princ
 		return fmt.Errorf("open repo: %w", err)
 	}
 
-	return git.CheckBranchProtection(repo, refUpdates, cfg, effectiveLevel, allowedBranches)
+	return git.CheckBranchProtection(repo, refUpdates, effectiveLevel, allowedBranches)
 }
 
-func registerTokenTools(mcpServer *mcp.Server, oauthStore *oauthstore.Store) {
+func registerTokenTools(mcpServer *mcp.Server, gitStore *git.Store, oauthStore *oauthstore.Store) {
 	if oauthStore == nil {
 		return
 	}
@@ -58,6 +49,25 @@ func registerTokenTools(mcpServer *mcp.Server, oauthStore *oauthstore.Store) {
 		}
 		if ttlDur <= 0 {
 			return nil, issueGitTokenOutput{}, fmt.Errorf("ttl must be positive")
+		}
+
+		// Reject if any allowed_branches prefix matches existing branches.
+		if len(in.AllowedBranches) > 0 {
+			repo, rerr := gitStore.OpenRepo(in.Namespace, in.ProjectName)
+			if rerr != nil {
+				return nil, issueGitTokenOutput{}, fmt.Errorf("open repo: %w", rerr)
+			}
+			branches, berr := git.ListBranches(repo)
+			if berr != nil {
+				return nil, issueGitTokenOutput{}, fmt.Errorf("list branches: %w", berr)
+			}
+			for _, prefix := range in.AllowedBranches {
+				for _, b := range branches {
+					if b == prefix || git.MatchesAllowedBranches(b, []string{prefix}) {
+						return nil, issueGitTokenOutput{}, fmt.Errorf("branches matching prefix %q already exist (e.g. %q)", prefix, b)
+					}
+				}
+			}
 		}
 
 		scopeLevel := "r"

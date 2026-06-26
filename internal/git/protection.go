@@ -30,13 +30,10 @@ func ParseRefUpdates(data []byte) []RefUpdate {
 		if len(payload) == 0 {
 			continue
 		}
-		// Strip capabilities after NUL byte
 		if idx := bytes.IndexByte(payload, 0); idx >= 0 {
 			payload = payload[:idx]
 		}
-		// Strip trailing newline
 		payload = bytes.TrimRight(payload, "\n")
-		// Format: <old-hash> SP <new-hash> SP <ref-name>
 		parts := bytes.SplitN(payload, []byte(" "), 3)
 		if len(parts) != 3 {
 			continue
@@ -50,13 +47,21 @@ func ParseRefUpdates(data []byte) []RefUpdate {
 	return updates
 }
 
-// CheckBranchProtection validates ref updates against branch protection rules
-// and token branch prefix restrictions. It returns an error describing the
-// first violation, or nil if all updates are allowed.
+// IsDefaultBranch reports whether branch is the repository's default branch
+// (the target of HEAD). Falls back to "main" if HEAD cannot be resolved.
+func IsDefaultBranch(repo *gogit.Repository, branch string) bool {
+	head, err := repo.Head()
+	if err != nil {
+		return branch == "main"
+	}
+	return head.Name().Short() == branch
+}
+
+// CheckBranchProtection validates ref updates against structural branch
+// protection (default branch) and token branch prefix restrictions.
 func CheckBranchProtection(
 	repo *gogit.Repository,
 	updates []RefUpdate,
-	config *ProjectConfig,
 	effectiveLevel authz.Level,
 	allowedBranches []string,
 ) error {
@@ -66,7 +71,7 @@ func CheckBranchProtection(
 			continue
 		}
 
-		if config.IsProtected(branch) {
+		if IsDefaultBranch(repo, branch) {
 			if u.NewHash == plumbing.ZeroHash {
 				return fmt.Errorf("cannot delete protected branch %q", branch)
 			}
@@ -84,19 +89,23 @@ func CheckBranchProtection(
 		}
 
 		if len(allowedBranches) > 0 {
-			matched := false
-			for _, prefix := range allowedBranches {
-				if strings.HasPrefix(branch, prefix) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
+			if !MatchesAllowedBranches(branch, allowedBranches) {
 				return fmt.Errorf("token restricted to branches: %v", allowedBranches)
 			}
 		}
 	}
 	return nil
+}
+
+// MatchesAllowedBranches reports whether branch matches any of the allowed
+// branch prefixes.
+func MatchesAllowedBranches(branch string, allowedBranches []string) bool {
+	for _, prefix := range allowedBranches {
+		if strings.HasPrefix(branch, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func isFastForward(repo *gogit.Repository, oldHash, newHash plumbing.Hash) (bool, error) {
@@ -132,4 +141,10 @@ func AllowedBranchesFromExtra(extra map[string]any) []string {
 		}
 	}
 	return out
+}
+
+// DeleteBranchRef removes a branch reference from the repository.
+func DeleteBranchRef(repo *gogit.Repository, branch string) error {
+	refName := plumbing.NewBranchReferenceName(branch)
+	return repo.Storer.RemoveReference(refName)
 }
