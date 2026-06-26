@@ -1,0 +1,3 @@
+steps:
+  - command: go run .
+    workdir: build/frontend

@@ -1,0 +1,8 @@
+github.com/evanw/esbuild v0.28.1 h1:ds+yuRyUaZGx++GR56CrCeuXh8PVhVM4xq8v7PNELFc=
+github.com/evanw/esbuild v0.28.1/go.mod h1:D2vIQZqV/vIf/VRHtViaUtViZmG7o+kKmlBfVQuRi48=
+github.com/sopranoworks/npmgo v0.2.0 h1:TK3R7Ycq3BdOX92SumylePz2d7Eszpz0RChyO2+SVnI=
+github.com/sopranoworks/npmgo v0.2.0/go.mod h1:2HI2IcHULuIqPhMGO7DC/0bIpdTo8mW5NZw4PO4WR3E=
+github.com/sopranoworks/npmgo/esbuildplugin v0.2.0 h1:iOReYQGpuXmPqKtbtS7DkqbBYc8GAS6bnRXcWICOqQY=
+github.com/sopranoworks/npmgo/esbuildplugin v0.2.0/go.mod h1:TstCzkPfvieYpFF2n0B3g/Q0hhuWBjVgDfIwbZbZbJc=
+golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8 h1:0A+M6Uqn+Eje4kHMK80dtF3JCXC4ykBgQG4Fe06QRhQ=
+golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
