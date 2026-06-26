@@ -275,9 +275,21 @@ func run(cfg *Config, logger *slog.Logger) error {
 
 	dumpHTTP := cfg.Server.Debug.DumpHTTP
 
+	// Trusted networks: IP-based auth bypass for internal deployments.
+	trustedNets := parseCIDRs(cfg.Server.HTTP.TrustedNetworks)
+	trustedProxies := parseCIDRs(cfg.Server.HTTP.TrustedProxies)
+	trustedPrincipal := auth.Principal{
+		Name:  cfg.Identity.User.Name,
+		Email: cfg.Identity.User.Email,
+		Scope: "*",
+	}
+
 	// Web listener: /auth/*, /ws/ui, /git/*, static (none yet). The whole mux is wrapped
 	// by authHandler.Middleware so the session principal is resolved for every route.
-	webHandler := reqtrace.Middleware(logger, "web", dumpHTTP)(setupWebHandler(webAuth, authHandler, wsMgr, gitHTTP, gitValidateToken))
+	// TrustedNetworkMiddleware sits outermost: trusted IPs get a synthetic principal
+	// that satisfies all downstream auth layers.
+	webHandler := TrustedNetworkMiddleware(trustedNets, trustedProxies, trustedPrincipal)(
+		reqtrace.Middleware(logger, "web", dumpHTTP)(setupWebHandler(webAuth, authHandler, wsMgr, gitHTTP, gitValidateToken)))
 	g.Go(func() error {
 		return runServer(ctx, "web", cfg.Server.HTTP.Listen, webHandler, logger)
 	})

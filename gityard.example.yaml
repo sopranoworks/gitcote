@@ -15,6 +15,16 @@ server:
   http:
     listen: ":8080"
     external_url: "http://localhost:8080"   # optional; reported by get_server_info
+    # Trusted networks: requests from these CIDRs skip authentication (both git
+    # and WebUI). Empty (default) = all requests require auth. No dual-transport.
+    # trusted_networks:
+    #   - "127.0.0.0/8"
+    #   - "192.168.0.0/16"
+    #   - "10.0.0.0/8"
+    # When behind a reverse proxy, use trusted_proxies so the middleware reads
+    # X-Forwarded-For (rightmost non-proxy IP) instead of RemoteAddr.
+    # trusted_proxies:
+    #   - "172.16.0.0/12"
 
   # MCP endpoint (Streamable HTTP, served at /mcp). At least one transport must be set.
   mcp:

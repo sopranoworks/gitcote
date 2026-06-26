@@ -222,6 +222,10 @@ func BasicAuthMiddleware(validateToken func(string) (auth.Principal, auth.Reject
 				next.ServeHTTP(w, r)
 				return
 			}
+			if _, ok := auth.PrincipalFrom(r.Context()); ok {
+				next.ServeHTTP(w, r)
+				return
+			}
 			_, password, ok := r.BasicAuth()
 			if !ok || password == "" {
 				w.Header().Set("WWW-Authenticate", `Basic realm="GitYard"`)

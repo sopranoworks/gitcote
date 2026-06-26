@@ -31,8 +31,10 @@ type ServerConfig struct {
 }
 
 type HTTPConfig struct {
-	Listen      string `yaml:"listen"`
-	ExternalURL string `yaml:"external_url"`
+	Listen          string   `yaml:"listen"`
+	ExternalURL     string   `yaml:"external_url"`
+	TrustedNetworks []string `yaml:"trusted_networks"`
+	TrustedProxies  []string `yaml:"trusted_proxies"`
 }
 
 type MCPConfig struct {
