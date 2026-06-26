@@ -21,23 +21,19 @@ func PushOptionsFromRequest(r *http.Request) []string {
 	return nil
 }
 
-// ExtractPushOptions parses push options from a receive-pack request body.
-// The body is buffered and a new ReadCloser is returned for the backend to consume.
-// Push options appear in the pkt-line stream after the command list (flush-pkt)
-// and before the packfile (PACK magic).
-//
-// Stream format:
-//
-//	[shallow] command+caps command* flush-pkt [push-options flush-pkt] [packfile]
-func ExtractPushOptions(body io.ReadCloser) ([]string, io.ReadCloser, error) {
+// ExtractReceivePackInfo parses push options and ref updates from a
+// receive-pack request body. The body is buffered and a new ReadCloser is
+// returned for the backend to consume.
+func ExtractReceivePackInfo(body io.ReadCloser) (pushOpts []string, refUpdates []RefUpdate, newBody io.ReadCloser, err error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	_ = body.Close()
 
-	opts := parsePushOptions(data)
-	return opts, io.NopCloser(bytes.NewReader(data)), nil
+	pushOpts = parsePushOptions(data)
+	refUpdates = ParseRefUpdates(data)
+	return pushOpts, refUpdates, io.NopCloser(bytes.NewReader(data)), nil
 }
 
 // parsePushOptions scans the receive-pack pkt-line stream for push options.

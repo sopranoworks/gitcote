@@ -1,0 +1,115 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/shoka/pkg/auth"
+	"github.com/sopranoworks/shoka/pkg/authz"
+	"github.com/sopranoworks/shoka/pkg/oauthstore"
+)
+
+const gityardIssuedClientID = "gityard-issued"
+
+func checkBranchProtection(gitStore *git.Store, namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
+	projPath, err := gitStore.ProjectPath(namespace, project)
+	if err != nil {
+		return fmt.Errorf("resolve project: %w", err)
+	}
+	cfg, err := git.LoadProjectConfig(projPath)
+	if err != nil {
+		return fmt.Errorf("load project config: %w", err)
+	}
+
+	effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
+	allowedBranches := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
+
+	repo, err := gitStore.OpenRepo(namespace, project)
+	if err != nil {
+		return fmt.Errorf("open repo: %w", err)
+	}
+
+	return git.CheckBranchProtection(repo, refUpdates, cfg, effectiveLevel, allowedBranches)
+}
+
+func registerTokenTools(mcpServer *mcp.Server, oauthStore *oauthstore.Store) {
+	if oauthStore == nil {
+		return
+	}
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "issue_git_token",
+		Description: "Issue a scoped, branch-restricted, short-lived CLI token for git access. Requires admin permission on the namespace.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in issueGitTokenInput) (*mcp.CallToolResult, issueGitTokenOutput, error) {
+		principal, hasPrincipal := auth.PrincipalFrom(ctx)
+		if !hasPrincipal {
+			return nil, issueGitTokenOutput{}, fmt.Errorf("authentication required")
+		}
+		if err := authz.Authorize(principal.Scope, in.Namespace, "", authz.LevelAdmin); err != nil {
+			return nil, issueGitTokenOutput{}, fmt.Errorf("admin access required on namespace %q", in.Namespace)
+		}
+
+		ttlDur, err := time.ParseDuration(in.TTL)
+		if err != nil {
+			return nil, issueGitTokenOutput{}, fmt.Errorf("invalid ttl %q: %w", in.TTL, err)
+		}
+		if ttlDur <= 0 {
+			return nil, issueGitTokenOutput{}, fmt.Errorf("ttl must be positive")
+		}
+
+		scopeLevel := "r"
+		if in.Scope == "w" || in.Scope == "rw" {
+			scopeLevel = "rw"
+		}
+		scope := fmt.Sprintf("namespace:%s/%s:%s", in.Namespace, in.ProjectName, scopeLevel)
+
+		var ep map[string]any
+		if len(in.AllowedBranches) > 0 {
+			branches := make([]any, len(in.AllowedBranches))
+			for i, b := range in.AllowedBranches {
+				branches[i] = b
+			}
+			ep = map[string]any{"allowed_branches": branches}
+		}
+
+		now := time.Now()
+		rec, err := oauthStore.NewSeries(
+			gityardIssuedClientID,
+			oauthstore.Principal{Name: "git-token", Email: principal.Email},
+			"",
+			scope,
+			now,
+			ttlDur,
+			ttlDur,
+			ep,
+		)
+		if err != nil {
+			return nil, issueGitTokenOutput{}, fmt.Errorf("issue token: %w", err)
+		}
+
+		return nil, issueGitTokenOutput{
+			Token:           rec.AccessToken,
+			Scope:           scope,
+			AllowedBranches: in.AllowedBranches,
+			ExpiresAt:       rec.AccessExpiry.Format(time.RFC3339),
+		}, nil
+	})
+}
+
+type issueGitTokenInput struct {
+	Namespace       string   `json:"namespace" jsonschema:"required,the namespace"`
+	ProjectName     string   `json:"project_name" jsonschema:"required,the project name"`
+	Scope           string   `json:"scope,omitempty" jsonschema:"permission level: r (read, default) or w (read-write)"`
+	AllowedBranches []string `json:"allowed_branches,omitempty" jsonschema:"optional branch prefix restrictions"`
+	TTL             string   `json:"ttl" jsonschema:"required,token lifetime as a Go duration string (e.g. 1h or 30m)"`
+}
+
+type issueGitTokenOutput struct {
+	Token           string   `json:"token"`
+	Scope           string   `json:"scope"`
+	AllowedBranches []string `json:"allowed_branches,omitempty"`
+	ExpiresAt       string   `json:"expires_at"`
+}

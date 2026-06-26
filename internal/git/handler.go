@@ -28,6 +28,11 @@ type Handler struct {
 	backend *backend.Backend
 	logger  *slog.Logger
 
+	// PreReceive is called before a receive-pack is delegated to the backend.
+	// It receives the namespace, project, principal, and parsed ref updates.
+	// Return a non-nil error to reject the push with a 403 response.
+	PreReceive func(namespace, project string, principal auth.Principal, refUpdates []RefUpdate) error
+
 	// PostReceive is called after a successful receive-pack (push). It receives
 	// the namespace, project, principal, and any push options extracted from the
 	// protocol stream (e.g. "pull_request.create", "pull_request.target=main").
@@ -90,21 +95,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For receive-pack POST, extract push options from the protocol stream
-	// before delegating to the backend (v6 decodes them internally but doesn't
-	// expose them). The body is buffered and re-wrapped so the backend can
-	// consume it.
+	// For receive-pack POST, extract push options and ref updates from the
+	// protocol stream before delegating to the backend.
 	var pushOpts []string
 	isReceivePack := len(parts) >= 3 && parts[2] == "git-receive-pack" && r.Method == http.MethodPost
 	if isReceivePack {
-		opts, newBody, err := ExtractPushOptions(r.Body)
+		opts, refUpdates, newBody, err := ExtractReceivePackInfo(r.Body)
 		if err != nil {
-			h.logger.Error("push option extraction failed", "error", err)
+			h.logger.Error("receive-pack info extraction failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		r.Body = newBody
 		pushOpts = opts
+
+		if h.PreReceive != nil {
+			principal, _ := auth.PrincipalFrom(r.Context())
+			if err := h.PreReceive(namespace, project, principal, refUpdates); err != nil {
+				http.Error(w, err.Error(), http.StatusForbidden)
+				return
+			}
+		}
 	}
 
 	// The URL path is already /<namespace>/<project>.git/<rest> — pass it
@@ -136,18 +147,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requiredLevel(r *http.Request, parts []string) authz.Level {
-	if len(parts) < 3 {
-		return authz.LevelRead
-	}
-	rest := parts[2]
-	switch {
-	case rest == "git-receive-pack":
-		return authz.LevelWrite
-	case rest == "info/refs" && r.URL.Query().Get("service") == "git-receive-pack":
-		return authz.LevelWrite
-	default:
-		return authz.LevelRead
-	}
+	// All git operations require at least LevelRead. R-level tokens can push
+	// to non-protected branches; the PreReceive hook enforces branch protection.
+	return authz.LevelRead
 }
 
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, namespace, project string, level authz.Level) bool {

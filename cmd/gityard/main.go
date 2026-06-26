@@ -158,7 +158,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 			if scope == "" {
 				scope = "*"
 			}
-			return auth.Principal{Name: rec.Principal.Name, Email: rec.Principal.Email, ClientID: rec.ClientID, Scope: scope}, "", true
+			return auth.Principal{Name: rec.Principal.Name, Email: rec.Principal.Email, ClientID: rec.ClientID, Scope: scope, ExtraPermissions: rec.ExtraPermissions}, "", true
 		}
 	}
 
@@ -199,6 +199,9 @@ func run(cfg *Config, logger *slog.Logger) error {
 
 	// ---- Smart HTTP handler (/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
 	gitHTTP := git.NewHandler(gitStore, logger)
+	gitHTTP.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
+		return checkBranchProtection(gitStore, namespace, project, principal, refUpdates)
+	}
 	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
 		logger.Info("post-receive",
 			"namespace", namespace, "project", project,
@@ -212,7 +215,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	if oauthStore != nil {
 		core.SetOAuthStore(oauthStore)
 		// Token-to-self: mint a CLI access token for the operator (OAUTH_ISSUE_SELF).
-		core.SetOAuthSelfIssuer(uiws.OAuthSelfIssuerFunc(func(r *http.Request, accessTTL time.Duration) (string, time.Time, error) {
+		core.SetOAuthSelfIssuer(uiws.OAuthSelfIssuerFunc(func(r *http.Request, accessTTL time.Duration, extraPermissions map[string]any) (string, time.Time, error) {
 			base, berr := serverurl.Base(cfg.Server.MCP.OAuth.ExternalURL, r)
 			if berr != nil {
 				return "", time.Time{}, berr
@@ -228,6 +231,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 				time.Now(),
 				accessTTL,
 				accessTTL,
+				extraPermissions,
 			)
 			if nerr != nil {
 				return "", time.Time{}, nerr
@@ -238,7 +242,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, logger)
 
 	// ---- MCP server (Git management tools + server info) ----
-	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, logger)
+	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, logger)
 
 	// ---- Seed push scheduler (periodic mode) ----
 	startSeedScheduler(ctx, seedCtx, logger)
@@ -358,7 +362,7 @@ func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, 
 
 // setupMCPServer builds the MCP server with GitYard's tool surface: server info,
 // project/repo management (create_project, list_projects).
-func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, logger *slog.Logger) *mcp.Server {
+func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStore *oauthstore.Store, logger *slog.Logger) *mcp.Server {
 	mcpServer := mcp.NewServer(
 		&mcp.Implementation{Name: "gityard", Version: version},
 		&mcp.ServerOptions{Logger: logger},
@@ -409,6 +413,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, logger *s
 	registerPRTools(mcpServer, gitStore, sc)
 	registerRepoTools(mcpServer, gitStore)
 	registerSeedTools(mcpServer, gitStore, sc.vault)
+	registerTokenTools(mcpServer, oauthStore)
 
 	return mcpServer
 }
