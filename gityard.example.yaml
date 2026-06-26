@@ -33,6 +33,7 @@ server:
   # ssh:
   #   listen: ":2222"
   #   host_key_path: "ssh_host_ed25519_key"  # relative to storage.base_dir
+  #   external_url: "gityard.internal"        # hostname for SSH clone URLs
 
   # MCP endpoint (Streamable HTTP, served at /mcp). At least one transport must be set.
   mcp:

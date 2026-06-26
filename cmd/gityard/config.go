@@ -34,6 +34,7 @@ type ServerConfig struct {
 type SSHConfig struct {
 	Listen      string `yaml:"listen"`
 	HostKeyPath string `yaml:"host_key_path"`
+	ExternalURL string `yaml:"external_url"`
 }
 
 type HTTPConfig struct {

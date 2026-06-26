@@ -249,7 +249,16 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 	defer func() { _ = sshKeyStore.Close() }()
 
-	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, logger)
+	srvInfoCtx := &serverInfoContext{
+		httpListen:      cfg.Server.HTTP.Listen,
+		httpExternalURL: cfg.Server.HTTP.ExternalURL,
+		mcpPlainListen:  cfg.Server.MCP.Plain.Listen,
+		mcpOAuthListen:  cfg.Server.MCP.OAuth.Listen,
+		mcpOAuthExtURL:  cfg.Server.MCP.OAuth.ExternalURL,
+		sshListen:       cfg.Server.SSH.Listen,
+		sshExternalURL:  cfg.Server.SSH.ExternalURL,
+	}
+	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, srvInfoCtx, logger)
 
 	// ---- MCP server (Git management tools + server info) ----
 	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, logger)
@@ -464,7 +473,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStor
 	registerPRTools(mcpServer, gitStore, sc)
 	registerRepoTools(mcpServer, gitStore)
 	registerSeedTools(mcpServer, gitStore, sc.vault)
-	registerTokenTools(mcpServer, gitStore, oauthStore)
+	registerTokenTools(mcpServer, gitStore, oauthStore, cfg.Server.HTTP.ExternalURL, cfg.Server.HTTP.Listen)
 
 	return mcpServer
 }

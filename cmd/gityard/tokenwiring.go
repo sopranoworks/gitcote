@@ -26,7 +26,7 @@ func checkBranchProtection(gitStore *git.Store, namespace, project string, princ
 	return git.CheckBranchProtection(repo, refUpdates, effectiveLevel, allowedBranches)
 }
 
-func registerTokenTools(mcpServer *mcp.Server, gitStore *git.Store, oauthStore *oauthstore.Store) {
+func registerTokenTools(mcpServer *mcp.Server, gitStore *git.Store, oauthStore *oauthstore.Store, httpExternalURL, httpListen string) {
 	if oauthStore == nil {
 		return
 	}
@@ -100,11 +100,18 @@ func registerTokenTools(mcpServer *mcp.Server, gitStore *git.Store, oauthStore *
 			return nil, issueGitTokenOutput{}, fmt.Errorf("issue token: %w", err)
 		}
 
+		base := httpExternalURL
+		if base == "" {
+			base = "http://" + httpListen
+		}
+		cloneURL := fmt.Sprintf("%s/%s/%s.git", base, in.Namespace, in.ProjectName)
+
 		return nil, issueGitTokenOutput{
 			Token:           rec.AccessToken,
 			Scope:           scope,
 			AllowedBranches: in.AllowedBranches,
 			ExpiresAt:       rec.AccessExpiry.Format(time.RFC3339),
+			CloneURL:        cloneURL,
 		}, nil
 	})
 }
@@ -122,4 +129,5 @@ type issueGitTokenOutput struct {
 	Scope           string   `json:"scope"`
 	AllowedBranches []string `json:"allowed_branches,omitempty"`
 	ExpiresAt       string   `json:"expires_at"`
+	CloneURL        string   `json:"clone_url"`
 }
