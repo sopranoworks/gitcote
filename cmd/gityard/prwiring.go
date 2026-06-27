@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"github.com/sopranoworks/gityard/internal/git"
 	"github.com/sopranoworks/gityard/internal/pr"
 	"github.com/sopranoworks/shoka/pkg/auth"
+	"github.com/sopranoworks/shoka/pkg/authz"
+	"github.com/sopranoworks/shoka/pkg/uiws"
 )
 
 // prStoreCache caches open PR stores per project to avoid re-opening the bbolt db
@@ -260,17 +263,29 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_pull_request",
-		Description: "Get a single pull request by number.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, *pr.PullRequest, error) {
+		Description: "Get a single pull request by number. Includes computed mergeable status and conflict details.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, getPROutput, error) {
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
-			return nil, nil, err
+			return nil, getPROutput{}, err
 		}
 		p, err := prStore.Get(in.Number)
 		if err != nil {
-			return nil, nil, err
+			return nil, getPROutput{}, err
 		}
-		return nil, p, nil
+		out := getPROutput{PullRequest: p}
+		if p.State == pr.StateOpen || p.State == pr.StateApproved {
+			result, mergeErr := computeMergeResult(gitStore, in.Namespace, in.ProjectName, p.SourceBranch, p.TargetBranch)
+			if mergeErr == nil {
+				out.IsMergeable = result.Clean
+				for _, c := range result.Conflicts {
+					out.Conflicts = append(out.Conflicts, conflictInfoWire{Path: c.Path, Type: c.Type})
+				}
+			}
+		} else if p.State == pr.StateMerged {
+			out.IsMergeable = true
+		}
+		return nil, out, nil
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
@@ -318,7 +333,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "merge_pull_request",
-		Description: "Merge an approved pull request. Fails if not approved or has conflicts.",
+		Description: "Merge an approved pull request. Re-computes merge status at execution time and rejects if conflicts exist.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mergePRInput) (*mcp.CallToolResult, mergePROutput, error) {
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
@@ -330,9 +345,6 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		}
 		if p.State != pr.StateApproved {
 			return nil, mergePROutput{}, fmt.Errorf("PR #%d is in state %q, not approved", in.Number, p.State)
-		}
-		if p.Mergeable != pr.MergeableClean {
-			return nil, mergePROutput{}, fmt.Errorf("PR #%d is not cleanly mergeable (status: %s)", in.Number, p.Mergeable)
 		}
 
 		principal, _ := auth.PrincipalFrom(ctx)
@@ -355,13 +367,21 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 			return nil, mergePROutput{}, fmt.Errorf("resolve target: %w", err)
 		}
 
-		// Verify target hasn't moved since last check.
-		if targetHash.String() != p.TargetCommit {
-			return nil, mergePROutput{}, fmt.Errorf("target branch %q has been updated since last check; recompute mergeable", p.TargetBranch)
+		// Re-compute merge at execution time (never trust cached status).
+		mergeResult, err := git.ComputeMerge(repo, targetHash, sourceHash)
+		if err != nil {
+			return nil, mergePROutput{}, fmt.Errorf("compute merge: %w", err)
+		}
+		if !mergeResult.Clean {
+			paths := make([]string, len(mergeResult.Conflicts))
+			for i, c := range mergeResult.Conflicts {
+				paths[i] = c.Path
+			}
+			return nil, mergePROutput{}, fmt.Errorf("PR #%d has merge conflicts: %s", in.Number, strings.Join(paths, ", "))
 		}
 
 		msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
-		mergeHash, err := git.MergeCommit(repo, sourceHash, targetHash, msg, "GitYard", "gityard@localhost")
+		mergeHash, err := git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
 		if err != nil {
 			return nil, mergePROutput{}, fmt.Errorf("create merge commit: %w", err)
 		}
@@ -488,6 +508,17 @@ type mergePROutput struct {
 	SourceBranchDeleted bool   `json:"source_branch_deleted"`
 }
 
+type getPROutput struct {
+	*pr.PullRequest
+	IsMergeable bool             `json:"mergeable"`
+	Conflicts   []conflictInfoWire `json:"conflicts,omitempty"`
+}
+
+type conflictInfoWire struct {
+	Path string `json:"path"`
+	Type string `json:"type"`
+}
+
 type prDiffOutput struct {
 	Diff  string         `json:"diff"`
 	Files []git.FileChange `json:"files"`
@@ -495,5 +526,91 @@ type prDiffOutput struct {
 
 type prFilesOutput struct {
 	Files []git.FileChange `json:"files"`
+}
+
+func computeMergeResult(gitStore *git.Store, namespace, project, sourceBranch, targetBranch string) (*git.MergeResult, error) {
+	repo, err := gitStore.OpenRepo(namespace, project)
+	if err != nil {
+		return nil, err
+	}
+	sourceHash, err := git.ResolveBranch(repo, sourceBranch)
+	if err != nil {
+		return nil, err
+	}
+	targetHash, err := git.ResolveBranch(repo, targetBranch)
+	if err != nil {
+		return nil, err
+	}
+	return git.ComputeMerge(repo, targetHash, sourceHash)
+}
+
+// --- PR WebSocket handler ---
+
+const MsgPRMergeable uiws.MessageType = "PR_MERGEABLE"
+
+var PRLevels = map[uiws.MessageType]uiws.Op{
+	MsgPRMergeable: {Level: authz.LevelRead, Global: false},
+}
+
+func prDispatch(c *uiws.Client, gitStore *git.Store, msgType uiws.MessageType, payload json.RawMessage) bool {
+	switch msgType {
+	case MsgPRMergeable:
+		handlePRMergeable(c, gitStore, payload)
+	default:
+		return false
+	}
+	return true
+}
+
+type prMergeablePayload struct {
+	Namespace   string `json:"namespace"`
+	ProjectName string `json:"projectName"`
+	PRNumber    uint32 `json:"prNumber"`
+}
+
+func handlePRMergeable(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
+	var p prMergeablePayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	pullReq, err := prStore.Get(p.PRNumber)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+
+	if pullReq.State == pr.StateMerged {
+		c.SendResponse(MsgPRMergeable, map[string]interface{}{"mergeable": true, "conflicts": []conflictInfoWire{}})
+		return
+	}
+	if pullReq.State == pr.StateClosed {
+		c.SendResponse(MsgPRMergeable, map[string]interface{}{"mergeable": false, "conflicts": []conflictInfoWire{}})
+		return
+	}
+
+	result, err := computeMergeResult(gitStore, p.Namespace, p.ProjectName, pullReq.SourceBranch, pullReq.TargetBranch)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+
+	var conflicts []conflictInfoWire
+	for _, cf := range result.Conflicts {
+		conflicts = append(conflicts, conflictInfoWire{Path: cf.Path, Type: cf.Type})
+	}
+	if conflicts == nil {
+		conflicts = []conflictInfoWire{}
+	}
+
+	c.SendResponse(MsgPRMergeable, map[string]interface{}{
+		"mergeable": result.Clean,
+		"conflicts": conflicts,
+	})
 }
 

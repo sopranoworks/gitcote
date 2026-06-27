@@ -1,6 +1,7 @@
 package git_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -168,6 +169,276 @@ func TestMergeNestedDirectory(t *testing.T) {
 
 	assertFileContent(t, mergeTree, "dir/x.txt", "x-modified")
 	assertFileContent(t, mergeTree, "dir/y.txt", "y")
+}
+
+func TestComputeMergeBothModifySameFile(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "base content")
+	baseHash := commitAll(t, repo, dir, "base")
+
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "a.txt", "target version")
+	targetHash := commitAll(t, repo, dir, "modify a on target")
+
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "a.txt", "source version")
+	sourceHash := commitAll(t, repo, dir, "modify a on source")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if result.Clean {
+		t.Fatal("expected conflict, got clean merge")
+	}
+	if len(result.Conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(result.Conflicts))
+	}
+	if result.Conflicts[0].Path != "a.txt" {
+		t.Errorf("conflict path = %q, want %q", result.Conflicts[0].Path, "a.txt")
+	}
+	if result.Conflicts[0].Type != "content" {
+		t.Errorf("conflict type = %q, want %q", result.Conflicts[0].Type, "content")
+	}
+}
+
+func TestComputeMergeBothModifySameContent(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "base")
+	baseHash := commitAll(t, repo, dir, "base")
+
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "a.txt", "same new content")
+	targetHash := commitAll(t, repo, dir, "modify a on target")
+
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "a.txt", "same new content")
+	sourceHash := commitAll(t, repo, dir, "modify a on source")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if !result.Clean {
+		t.Fatalf("expected clean merge, got conflicts: %v", result.Conflicts)
+	}
+
+	mergeCommit, _ := repo.CommitObject(commitFromTree(t, repo, result.TreeHash, targetHash, sourceHash))
+	mergeTree, _ := mergeCommit.Tree()
+	assertFileContent(t, mergeTree, "a.txt", "same new content")
+}
+
+func TestComputeMergeModifyDeleteConflict(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "base")
+	baseHash := commitAll(t, repo, dir, "base")
+
+	// Target deletes a.txt.
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	os.Remove(filepath.Join(dir, "a.txt"))
+	targetHash := commitRemove(t, repo, "a.txt", "delete a on target")
+
+	// Source modifies a.txt.
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "a.txt", "modified on source")
+	sourceHash := commitAll(t, repo, dir, "modify a on source")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if result.Clean {
+		t.Fatal("expected conflict, got clean merge")
+	}
+	if len(result.Conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(result.Conflicts))
+	}
+	if result.Conflicts[0].Type != "modify-delete" {
+		t.Errorf("conflict type = %q, want %q", result.Conflicts[0].Type, "modify-delete")
+	}
+}
+
+func TestComputeMergeDeleteModifyConflict(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "base")
+	baseHash := commitAll(t, repo, dir, "base")
+
+	// Target modifies a.txt.
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "a.txt", "modified on target")
+	targetHash := commitAll(t, repo, dir, "modify a on target")
+
+	// Source deletes a.txt.
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	os.Remove(filepath.Join(dir, "a.txt"))
+	sourceHash := commitRemove(t, repo, "a.txt", "delete a on source")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if result.Clean {
+		t.Fatal("expected conflict, got clean merge")
+	}
+	if len(result.Conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(result.Conflicts))
+	}
+	if result.Conflicts[0].Type != "modify-delete" {
+		t.Errorf("conflict type = %q, want %q", result.Conflicts[0].Type, "modify-delete")
+	}
+}
+
+func TestComputeMergeBothDelete(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "base")
+	writeFile(t, dir, "b.txt", "keep")
+	baseHash := commitAll(t, repo, dir, "base")
+
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	os.Remove(filepath.Join(dir, "a.txt"))
+	targetHash := commitRemove(t, repo, "a.txt", "delete a on target")
+
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	os.Remove(filepath.Join(dir, "a.txt"))
+	sourceHash := commitRemove(t, repo, "a.txt", "delete a on source")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if !result.Clean {
+		t.Fatalf("expected clean merge (both delete), got conflicts: %v", result.Conflicts)
+	}
+
+	mergeCommit, _ := repo.CommitObject(commitFromTree(t, repo, result.TreeHash, targetHash, sourceHash))
+	mergeTree, _ := mergeCommit.Tree()
+	assertFileAbsent(t, mergeTree, "a.txt")
+	assertFileContent(t, mergeTree, "b.txt", "keep")
+}
+
+func TestMergeCommitRejectsConflicts(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "base")
+	baseHash := commitAll(t, repo, dir, "base")
+
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "a.txt", "target version")
+	targetHash := commitAll(t, repo, dir, "modify a on target")
+
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "a.txt", "source version")
+	sourceHash := commitAll(t, repo, dir, "modify a on source")
+
+	_, err := git.MergeCommit(repo, sourceHash, targetHash, "merge", "Test", "test@test.com")
+	if err == nil {
+		t.Fatal("expected error from MergeCommit, got nil")
+	}
+	var mergeErr *git.MergeConflictError
+	if !errors.As(err, &mergeErr) {
+		t.Fatalf("expected MergeConflictError, got %T: %v", err, err)
+	}
+	if len(mergeErr.Conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(mergeErr.Conflicts))
+	}
+}
+
+func TestComputeMergeMultipleConflicts(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "a-base")
+	writeFile(t, dir, "b.txt", "b-base")
+	writeFile(t, dir, "c.txt", "c-base")
+	baseHash := commitAll(t, repo, dir, "base")
+
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "a.txt", "a-target")
+	writeFile(t, dir, "b.txt", "b-target")
+	writeFile(t, dir, "c.txt", "c-target")
+	targetHash := commitAll(t, repo, dir, "modify all on target")
+
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "a.txt", "a-source")
+	writeFile(t, dir, "b.txt", "b-source")
+	sourceHash := commitAll(t, repo, dir, "modify a,b on source")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if result.Clean {
+		t.Fatal("expected conflicts")
+	}
+	// a.txt and b.txt conflict; c.txt only changed on target → no conflict.
+	if len(result.Conflicts) != 2 {
+		t.Fatalf("expected 2 conflicts, got %d: %v", len(result.Conflicts), result.Conflicts)
+	}
+	// Conflicts should be sorted by path.
+	if result.Conflicts[0].Path != "a.txt" || result.Conflicts[1].Path != "b.txt" {
+		t.Errorf("conflicts = %v, want a.txt and b.txt", result.Conflicts)
+	}
+}
+
+func TestComputeMergeCleanDivergent(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "a")
+	writeFile(t, dir, "b.txt", "b")
+	baseHash := commitAll(t, repo, dir, "base")
+
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "a.txt", "a-modified")
+	targetHash := commitAll(t, repo, dir, "modify a on target")
+
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "b.txt", "b-modified")
+	sourceHash := commitAll(t, repo, dir, "modify b on source")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if !result.Clean {
+		t.Fatalf("expected clean merge, got conflicts: %v", result.Conflicts)
+	}
+	if result.FastForward {
+		t.Error("should not be fast-forward for divergent branches")
+	}
+
+	mergeCommit, _ := repo.CommitObject(commitFromTree(t, repo, result.TreeHash, targetHash, sourceHash))
+	mergeTree, _ := mergeCommit.Tree()
+	assertFileContent(t, mergeTree, "a.txt", "a-modified")
+	assertFileContent(t, mergeTree, "b.txt", "b-modified")
+}
+
+func commitFromTree(t *testing.T, repo *gogit.Repository, treeHash, parent1, parent2 plumbing.Hash) plumbing.Hash {
+	t.Helper()
+	hash, err := git.MergeCommitFromTree(repo, treeHash, parent1, parent2, "test merge", "Test", "test@test.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
 }
 
 // --- helpers ---
