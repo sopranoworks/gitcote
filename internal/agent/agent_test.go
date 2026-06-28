@@ -128,16 +128,47 @@ func TestVariableSubstitution_AllVars(t *testing.T) {
 		ShokaMCPURL:   "http://s:8081",
 		TempCloneDir:  "/tmp/tc",
 		ConflictFiles: "a.go,b.go",
+		OrderFiles:    "/shoka/dev/directives/d.md",
+		ResultFiles:   "/shoka/dev/reports/r.md,/shoka/dev/reports/r2.md",
 		Token:         "tok123",
 	}
 
 	vars := buildVarMap(ctx, "/work")
-	template := "$PR_ID $PR_NUMBER $NAMESPACE $PROJECT $SOURCE_BRANCH $TARGET_BRANCH $DIRECTIVE $REPORT $GITYARD_MCP_URL $GITYARD_GIT_URL $GITYARD_SSH_URL $SHOKA_MCP_URL $TEMP_CLONE_DIR $CONFLICT_FILES $TOKEN $WORK_DIR"
+	template := "$PR_ID $PR_NUMBER $NAMESPACE $PROJECT $SOURCE_BRANCH $TARGET_BRANCH $DIRECTIVE $REPORT $GITYARD_MCP_URL $GITYARD_GIT_URL $GITYARD_SSH_URL $SHOKA_MCP_URL $TEMP_CLONE_DIR $CONFLICT_FILES $ORDER_FILES $RESULT_FILES $TOKEN $WORK_DIR"
 	result := substituteVars(template, vars)
 
-	expected := "ns/proj#1 1 ns proj feature main d.md r.md http://g:8081 http://g:8080/ns/proj.git git@g:ns/proj.git http://s:8081 /tmp/tc a.go,b.go tok123 /work"
+	expected := "ns/proj#1 1 ns proj feature main d.md r.md http://g:8081 http://g:8080/ns/proj.git git@g:ns/proj.git http://s:8081 /tmp/tc a.go,b.go /shoka/dev/directives/d.md /shoka/dev/reports/r.md,/shoka/dev/reports/r2.md tok123 /work"
 	if result != expected {
 		t.Errorf("got:\n%s\nwant:\n%s", result, expected)
+	}
+}
+
+func TestSpawnContextOrderResultFiles(t *testing.T) {
+	ctx := &SpawnContext{
+		PRId:        "ns/proj#1",
+		PRNumber:    1,
+		Namespace:   "ns",
+		Project:     "proj",
+		OrderFiles:  "/shoka/dev/directives/task.md,/shoka/dev/specs/api.md",
+		ResultFiles: "/shoka/dev/reports/complete.md",
+	}
+
+	vars := buildVarMap(ctx, "/work")
+
+	if vars["$ORDER_FILES"] != "/shoka/dev/directives/task.md,/shoka/dev/specs/api.md" {
+		t.Errorf("ORDER_FILES = %q, want comma-separated paths", vars["$ORDER_FILES"])
+	}
+	if vars["$RESULT_FILES"] != "/shoka/dev/reports/complete.md" {
+		t.Errorf("RESULT_FILES = %q, want single path", vars["$RESULT_FILES"])
+	}
+
+	prompt := "Review PR. Orders: $ORDER_FILES Results: $RESULT_FILES"
+	resolved := substituteVars(prompt, vars)
+	if !strings.Contains(resolved, "/shoka/dev/directives/task.md") {
+		t.Error("ORDER_FILES not substituted into prompt")
+	}
+	if !strings.Contains(resolved, "/shoka/dev/reports/complete.md") {
+		t.Error("RESULT_FILES not substituted into prompt")
 	}
 }
 
