@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/gityard/internal/vault"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/uiws"
@@ -48,10 +49,18 @@ var SeedLevels = map[uiws.MessageType]uiws.Op{
 }
 
 type seedContext struct {
-	gitStore  *git.Store
-	vault     *vault.Vault
-	userStore *userstore.Store
-	resumed   bool
+	gitStore   *git.Store
+	vault      *vault.Vault
+	userStore  *userstore.Store
+	resumed    bool
+	gityardURL string
+}
+
+func buildGityardCloneURL(sc *seedContext, namespace, project string) string {
+	if sc.gityardURL == "" {
+		return ""
+	}
+	return sc.gityardURL + "/" + namespace + "/" + project + ".git"
 }
 
 // seedDispatch handles SEED_* WebSocket messages. Returns true if the message was handled.
@@ -307,44 +316,88 @@ func handleSeedPullWS(c *uiws.Client, sc *seedContext, payload json.RawMessage) 
 		c.SendError("invalid payload")
 		return
 	}
+	result := executeSeedPull(sc, p.Namespace, p.ProjectName, "")
+	c.SendResponse(MsgSeedPull, result)
+}
+
+func executeSeedPull(sc *seedContext, namespace, project, branch string) map[string]interface{} {
 	if sc.vault.State() != vault.VaultUnlocked {
-		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": "vault is locked — resume required"})
-		return
+		return map[string]interface{}{"success": false, "error": "vault is locked — resume required"}
 	}
-	projPath, err := sc.gitStore.ProjectPath(p.Namespace, p.ProjectName)
+	if branch == "" {
+		branch = "main"
+	}
+	projPath, err := sc.gitStore.ProjectPath(namespace, project)
 	if err != nil {
-		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": err.Error()})
-		return
+		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
 	cfg, err := git.LoadSeedConfig(projPath)
 	if err != nil {
-		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": err.Error()})
-		return
+		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
 	if cfg.SeedURL == "" {
-		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": "no seed URL configured"})
-		return
+		return map[string]interface{}{"success": false, "error": "no seed URL configured"}
 	}
 	if cfg.KeyName == "" {
-		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": "no key configured"})
-		return
+		return map[string]interface{}{"success": false, "error": "no key configured"}
 	}
-	pemData, err := sc.vault.DecryptPrivateKey(p.Namespace, cfg.KeyName)
+	pemData, err := sc.vault.DecryptPrivateKey(namespace, cfg.KeyName)
 	if err != nil {
-		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": err.Error()})
-		return
+		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	repo, err := sc.gitStore.OpenRepo(p.Namespace, p.ProjectName)
+	repo, err := sc.gitStore.OpenRepo(namespace, project)
 	if err != nil {
-		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": fmt.Sprintf("open repo: %v", err)})
-		return
+		return map[string]interface{}{"success": false, "error": fmt.Sprintf("open repo: %v", err)}
 	}
-	if err := git.PullFromSeed(repo, cfg.SeedURL, "", pemData); err != nil {
-		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": err.Error()})
-		return
+
+	seedHash, err := git.FetchSeedRef(repo, cfg.SeedURL, branch, pemData)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
 	}
-	recordHeadHash(sc.gitStore, p.Namespace, p.ProjectName)
-	c.SendResponse(MsgSeedPull, map[string]interface{}{"success": true})
+	localHash, err := git.ResolveBranch(repo, branch)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+
+	mr, err := git.SeedMerge(repo, localHash, seedHash)
+	if err != nil {
+		return map[string]interface{}{"success": false, "error": err.Error()}
+	}
+
+	switch mr.Status {
+	case "up-to-date":
+		return map[string]interface{}{"success": true, "status": "up-to-date", "message": "already up to date"}
+	case "fast-forward", "auto-merged":
+		if err := git.SetBranchRef(repo, branch, mr.MergedHash); err != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("update ref: %v", err)}
+		}
+		recordHeadHash(sc.gitStore, namespace, project)
+		return map[string]interface{}{"success": true, "status": mr.Status, "message": mr.Status + " completed"}
+	case "conflict":
+		var conflicts []conflictInfoWire
+		for _, c := range mr.Conflicts {
+			conflicts = append(conflicts, conflictInfoWire{Path: c.Path, Type: c.Type})
+		}
+		resp := map[string]interface{}{
+			"success":   false,
+			"status":    "conflict",
+			"conflicts": conflicts,
+		}
+		gityardURL := buildGityardCloneURL(sc, namespace, project)
+		tempDir, terr := git.CreateSeedTempClone(cfg.SeedURL, pemData, gityardURL)
+		if terr == nil {
+			resp["temp_clone"] = tempDir
+			resp["instructions"] = "Resolve conflicts in the temp clone, then: git push gityard HEAD:main"
+			if headStore != nil {
+				_ = headStore.AddTempClone(integrity.TempCloneRecord{
+					Namespace: namespace, Project: project,
+					Path: tempDir, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+				})
+			}
+		}
+		return resp
+	}
+	return map[string]interface{}{"success": false, "error": "unexpected merge status"}
 }
 
 func handleSeedResume(c *uiws.Client, sc *seedContext, payload json.RawMessage) {
@@ -403,121 +456,164 @@ func handleSeedStatusWS(c *uiws.Client, gitStore *git.Store, payload json.RawMes
 	})
 }
 
+// SeedPushResult holds the outcome of a push attempt with merge support.
+type SeedPushResult struct {
+	Success      bool
+	Status       string // "pushed", "auto-merged", "conflict"
+	Message      string
+	Conflicts    []conflictInfoWire
+	TempCloneDir string
+}
+
 func executeSeedPush(sc *seedContext, namespace, projectName, branch string) error {
-	if sc.vault.State() != vault.VaultUnlocked {
-		return fmt.Errorf("vault is locked — resume required")
+	r := executeSeedPushWithMerge(sc, namespace, projectName, branch)
+	if !r.Success {
+		return fmt.Errorf("%s", r.Message)
 	}
-	projPath, err := sc.gitStore.ProjectPath(namespace, projectName)
-	if err != nil {
-		return err
-	}
-	cfg, err := git.LoadSeedConfig(projPath)
-	if err != nil {
-		return err
-	}
-	if cfg.SeedURL == "" {
-		return fmt.Errorf("no seed URL configured")
-	}
-	if cfg.KeyName == "" {
-		return fmt.Errorf("no key configured")
-	}
-	pemData, err := sc.vault.DecryptPrivateKey(namespace, cfg.KeyName)
-	if err != nil {
-		return fmt.Errorf("decrypt key: %w", err)
-	}
-	repo, err := sc.gitStore.OpenRepo(namespace, projectName)
-	if err != nil {
-		return fmt.Errorf("open repo: %w", err)
-	}
-	if err := git.PushToSeed(repo, cfg.SeedURL, branch, pemData); err != nil {
-		now := time.Now()
-		_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{
-			State:      git.SeedStateError,
-			LastPushAt: &now,
-			LastResult: err.Error(),
-		})
-		return err
-	}
-	now := time.Now()
-	_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{
-		State:      git.SeedStateActive,
-		LastPushAt: &now,
-		LastResult: "ok",
-	})
 	return nil
 }
 
+func executeSeedPushWithMerge(sc *seedContext, namespace, projectName, branch string) SeedPushResult {
+	if sc.vault.State() != vault.VaultUnlocked {
+		return SeedPushResult{Message: "vault is locked — resume required"}
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	projPath, err := sc.gitStore.ProjectPath(namespace, projectName)
+	if err != nil {
+		return SeedPushResult{Message: err.Error()}
+	}
+	cfg, err := git.LoadSeedConfig(projPath)
+	if err != nil {
+		return SeedPushResult{Message: err.Error()}
+	}
+	if cfg.SeedURL == "" {
+		return SeedPushResult{Message: "no seed URL configured"}
+	}
+	if cfg.KeyName == "" {
+		return SeedPushResult{Message: "no key configured"}
+	}
+	pemData, err := sc.vault.DecryptPrivateKey(namespace, cfg.KeyName)
+	if err != nil {
+		return SeedPushResult{Message: fmt.Sprintf("decrypt key: %v", err)}
+	}
+	repo, err := sc.gitStore.OpenRepo(namespace, projectName)
+	if err != nil {
+		return SeedPushResult{Message: fmt.Sprintf("open repo: %v", err)}
+	}
+
+	const maxRetries = 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		pushErr := git.PushToSeed(repo, cfg.SeedURL, branch, pemData)
+		if pushErr == nil {
+			now := time.Now()
+			_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{
+				State: git.SeedStateActive, LastPushAt: &now, LastResult: "ok",
+			})
+			status := "pushed"
+			if attempt > 0 {
+				status = "auto-merged"
+			}
+			return SeedPushResult{Success: true, Status: status, Message: status + " successfully"}
+		}
+
+		// Push failed — try fetch + merge + retry.
+		seedHash, fetchErr := git.FetchSeedRef(repo, cfg.SeedURL, branch, pemData)
+		if fetchErr != nil {
+			now := time.Now()
+			_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{
+				State: git.SeedStateError, LastPushAt: &now, LastResult: pushErr.Error(),
+			})
+			return SeedPushResult{Message: pushErr.Error()}
+		}
+
+		localHash, _ := git.ResolveBranch(repo, branch)
+		mr, mergeErr := git.SeedMerge(repo, localHash, seedHash)
+		if mergeErr != nil {
+			return SeedPushResult{Message: fmt.Sprintf("merge: %v", mergeErr)}
+		}
+
+		switch mr.Status {
+		case "up-to-date":
+			return SeedPushResult{Success: true, Status: "up-to-date", Message: "already up to date"}
+		case "conflict":
+			var conflicts []conflictInfoWire
+			for _, c := range mr.Conflicts {
+				conflicts = append(conflicts, conflictInfoWire{Path: c.Path, Type: c.Type})
+			}
+			result := SeedPushResult{Status: "conflict", Message: "push conflicts", Conflicts: conflicts}
+			gityardURL := buildGityardCloneURL(sc, namespace, projectName)
+			tempDir, terr := git.CreateSeedTempClone(cfg.SeedURL, pemData, gityardURL)
+			if terr == nil {
+				result.TempCloneDir = tempDir
+				if headStore != nil {
+					_ = headStore.AddTempClone(integrity.TempCloneRecord{
+						Namespace: namespace, Project: projectName,
+						Path: tempDir, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+					})
+				}
+			}
+			now := time.Now()
+			_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{
+				State: git.SeedStateError, LastPushAt: &now, LastResult: "conflict",
+			})
+			return result
+		case "fast-forward", "auto-merged":
+			_ = git.SetBranchRef(repo, branch, mr.MergedHash)
+			recordHeadHash(sc.gitStore, namespace, projectName)
+			// Retry push with merged commit.
+		}
+	}
+
+	return SeedPushResult{Message: "push failed after retries"}
+}
+
 // registerSeedTools registers seed-related MCP tools.
-func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vault) {
+func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vault, gityardURL string) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "push_to_seed",
-		Description: "Push a branch to the configured seed repository via SSH.",
+		Description: "Push a branch to the configured seed repository via SSH. Auto-merges if seed has diverged cleanly; reports conflicts otherwise.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in pushToSeedInput) (*mcp.CallToolResult, pushToSeedOutput, error) {
-		if v.State() != vault.VaultUnlocked {
-			return nil, pushToSeedOutput{Success: false, Message: "vault is locked — resume required"}, nil
-		}
-		projPath, err := gitStore.ProjectPath(in.Namespace, in.ProjectName)
-		if err != nil {
-			return nil, pushToSeedOutput{}, err
-		}
-		cfg, err := git.LoadSeedConfig(projPath)
-		if err != nil {
-			return nil, pushToSeedOutput{}, err
-		}
-		if cfg.SeedURL == "" {
-			return nil, pushToSeedOutput{Success: false, Message: "no seed URL configured"}, nil
-		}
-		if cfg.KeyName == "" {
-			return nil, pushToSeedOutput{Success: false, Message: "no key configured"}, nil
-		}
-		pemData, err := v.DecryptPrivateKey(in.Namespace, cfg.KeyName)
-		if err != nil {
-			return nil, pushToSeedOutput{Success: false, Message: err.Error()}, nil
-		}
-		repo, err := gitStore.OpenRepo(in.Namespace, in.ProjectName)
-		if err != nil {
-			return nil, pushToSeedOutput{}, fmt.Errorf("open repo: %w", err)
-		}
-		if err := git.PushToSeed(repo, cfg.SeedURL, in.Branch, pemData); err != nil {
-			return nil, pushToSeedOutput{Success: false, Message: err.Error()}, nil
-		}
-		return nil, pushToSeedOutput{Success: true, Message: "pushed successfully"}, nil
+		sc := &seedContext{gitStore: gitStore, vault: v, gityardURL: gityardURL}
+		r := executeSeedPushWithMerge(sc, in.Namespace, in.ProjectName, in.Branch)
+		return nil, pushToSeedOutput{
+			Success:      r.Success,
+			Message:      r.Message,
+			Status:       r.Status,
+			Conflicts:    r.Conflicts,
+			TempClone:    r.TempCloneDir,
+			Instructions: tempCloneInstructions(r),
+		}, nil
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "pull_from_seed",
-		Description: "Pull (fetch + fast-forward) from the configured seed repository via SSH.",
+		Description: "Pull from the configured seed repository via SSH. Auto-merges if branches have diverged cleanly; reports conflicts otherwise.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in pullFromSeedInput) (*mcp.CallToolResult, pullFromSeedOutput, error) {
-		if v.State() != vault.VaultUnlocked {
-			return nil, pullFromSeedOutput{Success: false, Message: "vault is locked — resume required"}, nil
+		sc := &seedContext{gitStore: gitStore, vault: v, gityardURL: gityardURL}
+		r := executeSeedPull(sc, in.Namespace, in.ProjectName, in.Branch)
+		success, _ := r["success"].(bool)
+		msg, _ := r["message"].(string)
+		if msg == "" {
+			if errStr, ok := r["error"].(string); ok {
+				msg = errStr
+			}
 		}
-		projPath, err := gitStore.ProjectPath(in.Namespace, in.ProjectName)
-		if err != nil {
-			return nil, pullFromSeedOutput{}, err
+		out := pullFromSeedOutput{Success: success, Message: msg}
+		if status, ok := r["status"].(string); ok {
+			out.Status = status
 		}
-		cfg, err := git.LoadSeedConfig(projPath)
-		if err != nil {
-			return nil, pullFromSeedOutput{}, err
+		if conflicts, ok := r["conflicts"].([]conflictInfoWire); ok {
+			out.Conflicts = conflicts
 		}
-		if cfg.SeedURL == "" {
-			return nil, pullFromSeedOutput{Success: false, Message: "no seed URL configured"}, nil
+		if tc, ok := r["temp_clone"].(string); ok {
+			out.TempClone = tc
 		}
-		if cfg.KeyName == "" {
-			return nil, pullFromSeedOutput{Success: false, Message: "no key configured"}, nil
+		if inst, ok := r["instructions"].(string); ok {
+			out.Instructions = inst
 		}
-		pemData, err := v.DecryptPrivateKey(in.Namespace, cfg.KeyName)
-		if err != nil {
-			return nil, pullFromSeedOutput{Success: false, Message: err.Error()}, nil
-		}
-		repo, err := gitStore.OpenRepo(in.Namespace, in.ProjectName)
-		if err != nil {
-			return nil, pullFromSeedOutput{}, fmt.Errorf("open repo: %w", err)
-		}
-		if err := git.PullFromSeed(repo, cfg.SeedURL, in.Branch, pemData); err != nil {
-			return nil, pullFromSeedOutput{Success: false, Message: err.Error()}, nil
-		}
-		recordHeadHash(gitStore, in.Namespace, in.ProjectName)
-		return nil, pullFromSeedOutput{Success: true, Message: "pulled successfully"}, nil
+		return nil, out, nil
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
@@ -557,8 +653,12 @@ type pushToSeedInput struct {
 }
 
 type pushToSeedOutput struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	Success      bool               `json:"success"`
+	Message      string             `json:"message"`
+	Status       string             `json:"status,omitempty"`
+	Conflicts    []conflictInfoWire `json:"conflicts,omitempty"`
+	TempClone    string             `json:"temp_clone,omitempty"`
+	Instructions string             `json:"instructions,omitempty"`
 }
 
 type pullFromSeedInput struct {
@@ -568,8 +668,19 @@ type pullFromSeedInput struct {
 }
 
 type pullFromSeedOutput struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	Success      bool               `json:"success"`
+	Message      string             `json:"message"`
+	Status       string             `json:"status,omitempty"`
+	Conflicts    []conflictInfoWire `json:"conflicts,omitempty"`
+	TempClone    string             `json:"temp_clone,omitempty"`
+	Instructions string             `json:"instructions,omitempty"`
+}
+
+func tempCloneInstructions(r SeedPushResult) string {
+	if r.TempCloneDir != "" {
+		return "Resolve conflicts in the temp clone, then: git push gityard HEAD:main"
+	}
+	return ""
 }
 
 type getSeedStatusInput struct {
@@ -674,4 +785,40 @@ func triggerOnMergePush(sc *seedContext, namespace, project, branch string) {
 	}
 	slog.Default().Info("on-merge push: succeeded",
 		"namespace", namespace, "project", project, "branch", branch)
+}
+
+// startTempCloneCleanup periodically removes temp clones older than 24 hours.
+func startTempCloneCleanup(ctx context.Context, hs *integrity.Store, logger *slog.Logger) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cleanupTempClones(hs, logger)
+			}
+		}
+	}()
+}
+
+func cleanupTempClones(hs *integrity.Store, logger *slog.Logger) {
+	if hs == nil {
+		return
+	}
+	recs, err := hs.ListTempClones()
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, rec := range recs {
+		created, perr := time.Parse(time.RFC3339, rec.CreatedAt)
+		if perr != nil || created.Before(cutoff) {
+			if err := os.RemoveAll(rec.Path); err == nil || os.IsNotExist(err) {
+				_ = hs.RemoveTempClone(rec.Path)
+				logger.Info("cleaned up temp clone", "path", rec.Path, "namespace", rec.Namespace, "project", rec.Project)
+			}
+		}
+	}
 }

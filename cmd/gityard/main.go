@@ -195,10 +195,16 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 	defer func() { _ = keyVault.Close() }()
 
+	gityardURL := cfg.Server.HTTP.ExternalURL
+	if gityardURL == "" {
+		gityardURL = "http://" + cfg.Server.HTTP.Listen
+	}
+
 	seedCtx := &seedContext{
-		gitStore:  gitStore,
-		vault:     keyVault,
-		userStore: userStore,
+		gitStore:   gitStore,
+		vault:      keyVault,
+		userStore:  userStore,
+		gityardURL: gityardURL,
 	}
 
 	// ---- Smart HTTP handler (/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
@@ -274,7 +280,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, srvInfoCtx, logger)
 
 	// ---- MCP server (Git management tools + server info) ----
-	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, logger)
+	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, gityardURL, logger)
 
 	// ---- Seed push scheduler (periodic mode) ----
 	startSeedScheduler(ctx, seedCtx, logger)
@@ -283,6 +289,9 @@ func run(cfg *Config, logger *slog.Logger) error {
 	startIntegrityWorker(ctx, gitStore, integrityHS, cfg.Server.IntegrityCheck, integrityStatus, func(alert IntegrityAlert) {
 		wsMgr.Broadcast(MsgRepoIntegrityAlert, alert)
 	}, logger)
+
+	// ---- Seed temp clone cleanup ----
+	startTempCloneCleanup(ctx, integrityHS, logger)
 
 	// ---- HTTP listeners ----
 	g, ctx := errgroup.WithContext(ctx)
@@ -440,7 +449,7 @@ func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, 
 
 // setupMCPServer builds the MCP server with GitYard's tool surface: server info,
 // project/repo management (create_project, list_projects).
-func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStore *oauthstore.Store, logger *slog.Logger) *mcp.Server {
+func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStore *oauthstore.Store, gityardURL string, logger *slog.Logger) *mcp.Server {
 	mcpServer := mcp.NewServer(
 		&mcp.Implementation{Name: "gityard", Version: version},
 		&mcp.ServerOptions{Logger: logger},
@@ -500,7 +509,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStor
 
 	registerPRTools(mcpServer, gitStore, sc)
 	registerRepoTools(mcpServer, gitStore)
-	registerSeedTools(mcpServer, gitStore, sc.vault)
+	registerSeedTools(mcpServer, gitStore, sc.vault, gityardURL)
 	registerTokenTools(mcpServer, gitStore, oauthStore, cfg.Server.HTTP.ExternalURL, cfg.Server.HTTP.Listen)
 
 	return mcpServer
