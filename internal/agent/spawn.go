@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -57,6 +58,11 @@ func PrepareWorkDir(config *AgentConfig, ctx *SpawnContext) (workDir string, cle
 			cleanup()
 			return "", nil, fmt.Errorf("copy environment_default: %w", err)
 		}
+	}
+
+	if err := generateMCPConfig(workDir, ctx); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("generate .mcp.json: %w", err)
 	}
 
 	return workDir, cleanup, nil
@@ -149,6 +155,25 @@ func ExecuteAgent(
 		result.ExitCode = -1
 		return result, nil
 	}
+}
+
+func generateMCPConfig(workDir string, ctx *SpawnContext) error {
+	servers := map[string]map[string]string{}
+	if ctx.GityardMCPURL != "" {
+		servers["gityard"] = map[string]string{"url": ctx.GityardMCPURL}
+	}
+	if ctx.ShokaMCPURL != "" {
+		servers["shoka"] = map[string]string{"url": ctx.ShokaMCPURL}
+	}
+	if len(servers) == 0 {
+		return nil
+	}
+	cfg := map[string]any{"mcpServers": servers}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(workDir, ".mcp.json"), data, 0o644)
 }
 
 func buildVarMap(ctx *SpawnContext, workDir string) map[string]string {

@@ -5,10 +5,11 @@ agent:
   prompt: |
     Review PR $PR_ID ($SOURCE_BRANCH → $TARGET_BRANCH).
 
-    Directive: $DIRECTIVE
-    Coder's report: $REPORT
+    Connect to GitYard MCP at $GITYARD_MCP_URL.
+    Read the PR diff and review the changes.
 
-    1. Connect to GitYard MCP and read the PR diff
-    2. Check against the directive requirements
-    3. Write a review report to Shoka
-    4. Call approve_pull_request or reject_pull_request
+    If a directive is available: $DIRECTIVE
+    If a completion report is available: $REPORT
+    (Read these from Shoka MCP at $SHOKA_MCP_URL if available.)
+
+    Call approve_pull_request or reject_pull_request when done.
