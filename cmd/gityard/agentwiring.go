@@ -4,16 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sopranoworks/gityard/internal/agent"
 	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/authz"
 )
 
-func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawnConfig, baseDir string, gityardURL string, logger *slog.Logger) {
+func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawnConfig, baseDir string, gityardURL string, hs *integrity.Store, logger *slog.Logger) {
 	if !agentCfg.IsEnabled() {
 		return
 	}
@@ -56,8 +58,18 @@ func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawn
 		if err != nil {
 			return nil, spawnAgentOutput{}, fmt.Errorf("prepare workdir: %w", err)
 		}
-		if !agentCfg.RetainWorkdir {
-			defer cleanup()
+
+		if hs != nil {
+			_ = hs.AddAgentWorkdir(integrity.AgentWorkdirRecord{
+				Path:      workDir,
+				AgentName: ac.DirName,
+				Role:      ac.Role,
+				Namespace: in.Namespace,
+				Project:   in.ProjectName,
+				PRNumber:  in.PRNumber,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339),
+				Status:    "running",
+			})
 		}
 
 		result, err := agent.ExecuteAgent(ac, spawnCtx, workDir, agentCfg.TimeoutDuration(), logger)
@@ -73,13 +85,22 @@ func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawn
 			status = "killed"
 		}
 
+		if result.ExitCode == 0 && !agentCfg.RetainWorkdir {
+			cleanup()
+			if hs != nil {
+				_ = hs.RemoveAgentWorkdir(workDir)
+			}
+		} else if hs != nil {
+			_ = hs.UpdateAgentWorkdir(workDir, status, result.ExitCode)
+		}
+
 		return nil, spawnAgentOutput{
-			Status:    status,
-			ExitCode:  result.ExitCode,
-			Killed:    result.Killed,
+			Status:     status,
+			ExitCode:   result.ExitCode,
+			Killed:     result.Killed,
 			KillReason: result.KillReason,
-			LogFile:   result.LogFile,
-			Duration:  result.FinishedAt.Sub(result.StartedAt).Round(time.Millisecond).String(),
+			LogFile:    result.LogFile,
+			Duration:   result.FinishedAt.Sub(result.StartedAt).Round(time.Millisecond).String(),
 		}, nil
 	})
 
@@ -102,6 +123,81 @@ func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawn
 			})
 		}
 		return nil, listAgentsOutput{Agents: agents}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "list_agent_workdirs",
+		Description: "List tracked agent working directories with status and expiry. Admin only.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ listAgentWorkdirsInput) (*mcp.CallToolResult, listAgentWorkdirsOutput, error) {
+		principal, hasPrincipal := auth.PrincipalFrom(ctx)
+		if hasPrincipal {
+			if err := authz.Authorize(principal.Scope, "", "", authz.LevelAdmin); err != nil {
+				return nil, listAgentWorkdirsOutput{}, fmt.Errorf("admin access required")
+			}
+		}
+
+		if hs == nil {
+			return nil, listAgentWorkdirsOutput{}, nil
+		}
+
+		recs, err := hs.ListAgentWorkdirs()
+		if err != nil {
+			return nil, listAgentWorkdirsOutput{}, fmt.Errorf("list workdirs: %w", err)
+		}
+
+		var workdirs []workdirInfo
+		for _, r := range recs {
+			wi := workdirInfo{
+				Path:      r.Path,
+				AgentName: r.AgentName,
+				Role:      r.Role,
+				Namespace: r.Namespace,
+				Project:   r.Project,
+				PRNumber:  r.PRNumber,
+				CreatedAt: r.CreatedAt,
+				Status:    r.Status,
+				ExitCode:  r.ExitCode,
+			}
+			if created, perr := time.Parse(time.RFC3339, r.CreatedAt); perr == nil && r.Status != "running" {
+				wi.ExpiresAt = created.Add(24 * time.Hour).UTC().Format(time.RFC3339)
+			}
+			workdirs = append(workdirs, wi)
+		}
+		return nil, listAgentWorkdirsOutput{Workdirs: workdirs}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "delete_agent_workdir",
+		Description: "Delete an agent working directory and its tracking record. Refuses to delete a running agent's workdir. Admin only.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteAgentWorkdirInput) (*mcp.CallToolResult, deleteAgentWorkdirOutput, error) {
+		principal, hasPrincipal := auth.PrincipalFrom(ctx)
+		if hasPrincipal {
+			if err := authz.Authorize(principal.Scope, "", "", authz.LevelAdmin); err != nil {
+				return nil, deleteAgentWorkdirOutput{}, fmt.Errorf("admin access required")
+			}
+		}
+
+		if hs == nil {
+			return nil, deleteAgentWorkdirOutput{}, fmt.Errorf("store not available")
+		}
+
+		rec, err := hs.GetAgentWorkdir(in.Path)
+		if err != nil {
+			return nil, deleteAgentWorkdirOutput{}, fmt.Errorf("get workdir: %w", err)
+		}
+		if rec == nil {
+			return nil, deleteAgentWorkdirOutput{}, fmt.Errorf("workdir not found: %s", in.Path)
+		}
+		if rec.Status == "running" {
+			return nil, deleteAgentWorkdirOutput{}, fmt.Errorf("cannot delete workdir of a running agent")
+		}
+
+		if err := os.RemoveAll(in.Path); err != nil && !os.IsNotExist(err) {
+			return nil, deleteAgentWorkdirOutput{}, fmt.Errorf("remove workdir: %w", err)
+		}
+		_ = hs.RemoveAgentWorkdir(in.Path)
+
+		return nil, deleteAgentWorkdirOutput{Message: "workdir deleted"}, nil
 	})
 }
 
@@ -134,4 +230,31 @@ type agentInfo struct {
 
 type listAgentsOutput struct {
 	Agents []agentInfo `json:"agents"`
+}
+
+type listAgentWorkdirsInput struct{}
+
+type workdirInfo struct {
+	Path      string `json:"path"`
+	AgentName string `json:"agent_name"`
+	Role      string `json:"role"`
+	Namespace string `json:"namespace"`
+	Project   string `json:"project"`
+	PRNumber  int    `json:"pr_number"`
+	CreatedAt string `json:"created_at"`
+	Status    string `json:"status"`
+	ExitCode  int    `json:"exit_code"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+type listAgentWorkdirsOutput struct {
+	Workdirs []workdirInfo `json:"workdirs"`
+}
+
+type deleteAgentWorkdirInput struct {
+	Path string `json:"path" jsonschema:"required,the workdir path to delete"`
+}
+
+type deleteAgentWorkdirOutput struct {
+	Message string `json:"message"`
 }

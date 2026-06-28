@@ -807,17 +807,33 @@ func cleanupTempClones(hs *integrity.Store, logger *slog.Logger) {
 	if hs == nil {
 		return
 	}
-	recs, err := hs.ListTempClones()
-	if err != nil {
-		return
-	}
 	cutoff := time.Now().Add(-24 * time.Hour)
-	for _, rec := range recs {
-		created, perr := time.Parse(time.RFC3339, rec.CreatedAt)
-		if perr != nil || created.Before(cutoff) {
-			if err := os.RemoveAll(rec.Path); err == nil || os.IsNotExist(err) {
-				_ = hs.RemoveTempClone(rec.Path)
-				logger.Info("cleaned up temp clone", "path", rec.Path, "namespace", rec.Namespace, "project", rec.Project)
+
+	recs, err := hs.ListTempClones()
+	if err == nil {
+		for _, rec := range recs {
+			created, perr := time.Parse(time.RFC3339, rec.CreatedAt)
+			if perr != nil || created.Before(cutoff) {
+				if err := os.RemoveAll(rec.Path); err == nil || os.IsNotExist(err) {
+					_ = hs.RemoveTempClone(rec.Path)
+					logger.Info("cleaned up temp clone", "path", rec.Path, "namespace", rec.Namespace, "project", rec.Project)
+				}
+			}
+		}
+	}
+
+	workdirs, err := hs.ListAgentWorkdirs()
+	if err == nil {
+		for _, rec := range workdirs {
+			if rec.Status == "running" {
+				continue
+			}
+			created, perr := time.Parse(time.RFC3339, rec.CreatedAt)
+			if perr != nil || created.Before(cutoff) {
+				if err := os.RemoveAll(rec.Path); err == nil || os.IsNotExist(err) {
+					_ = hs.RemoveAgentWorkdir(rec.Path)
+					logger.Info("cleaned up agent workdir", "path", rec.Path, "agent", rec.AgentName, "status", rec.Status)
+				}
 			}
 		}
 	}
