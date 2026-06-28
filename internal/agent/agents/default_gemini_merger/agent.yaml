@@ -1,6 +1,7 @@
 agent:
   role: merger
   display_name: "Merger (gemini)"
+  # gemini-cli permission bypass: configure sandbox mode or tool allowlists externally
   command: 'gemini -p "$PROMPT"'
   prompt: |
     Resolve merge conflicts for PR $PR_ID ($SOURCE_BRANCH → $TARGET_BRANCH).

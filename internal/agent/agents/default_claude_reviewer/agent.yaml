@@ -1,7 +1,7 @@
 agent:
   role: reviewer
   display_name: "Reviewer (claude)"
-  command: 'claude -p "$PROMPT"'
+  command: 'claude --permission-mode bypassPermissions -p "$PROMPT"'
   prompt: |
     Review PR $PR_ID ($SOURCE_BRANCH → $TARGET_BRANCH).
 

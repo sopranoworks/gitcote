@@ -1,7 +1,8 @@
 agent:
   role: merger
   display_name: "Merger (codex)"
-  command: 'codex -p "$PROMPT"'
+  # codex may need --approval-mode full-auto for non-interactive use
+  command: 'codex --full-auto -p "$PROMPT"'
   prompt: |
     Resolve merge conflicts for PR $PR_ID ($SOURCE_BRANCH → $TARGET_BRANCH).
 
