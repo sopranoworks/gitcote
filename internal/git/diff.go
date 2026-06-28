@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	gogit "github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/utils/merkletrie"
 )
@@ -15,12 +16,9 @@ type FileChange struct {
 }
 
 // PRDiff computes the unified diff and changed file list between two branches.
+// When the target branch has no commits (empty base), all source files are shown as additions.
 func PRDiff(repo *gogit.Repository, sourceBranch, targetBranch string) (string, []FileChange, error) {
 	sourceHash, err := ResolveBranch(repo, sourceBranch)
-	if err != nil {
-		return "", nil, err
-	}
-	targetHash, err := ResolveBranch(repo, targetBranch)
 	if err != nil {
 		return "", nil, err
 	}
@@ -29,18 +27,24 @@ func PRDiff(repo *gogit.Repository, sourceBranch, targetBranch string) (string, 
 	if err != nil {
 		return "", nil, fmt.Errorf("source commit: %w", err)
 	}
-	targetCommit, err := repo.CommitObject(targetHash)
-	if err != nil {
-		return "", nil, fmt.Errorf("target commit: %w", err)
-	}
-
 	sourceTree, err := sourceCommit.Tree()
 	if err != nil {
 		return "", nil, fmt.Errorf("source tree: %w", err)
 	}
-	targetTree, err := targetCommit.Tree()
-	if err != nil {
-		return "", nil, fmt.Errorf("target tree: %w", err)
+
+	targetHash, _ := ResolveBranch(repo, targetBranch)
+	var targetTree *object.Tree
+	if targetHash != plumbing.ZeroHash {
+		targetCommit, err := repo.CommitObject(targetHash)
+		if err != nil {
+			return "", nil, fmt.Errorf("target commit: %w", err)
+		}
+		targetTree, err = targetCommit.Tree()
+		if err != nil {
+			return "", nil, fmt.Errorf("target tree: %w", err)
+		}
+	} else {
+		targetTree = &object.Tree{}
 	}
 
 	changes, err := object.DiffTree(targetTree, sourceTree)

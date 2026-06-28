@@ -653,6 +653,96 @@ func TestLineMergeBinaryFallback(t *testing.T) {
 	}
 }
 
+func TestComputeMergeEmptyBase(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "hello")
+	writeFile(t, dir, "b.txt", "world")
+	sourceHash := commitAll(t, repo, dir, "initial commit on feature")
+
+	result, err := git.ComputeMerge(repo, plumbing.ZeroHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge with empty base: %v", err)
+	}
+	if !result.Clean {
+		t.Fatalf("expected clean merge for empty base, got conflicts: %v", result.Conflicts)
+	}
+
+	sourceCommit, _ := repo.CommitObject(sourceHash)
+	sourceTree, _ := sourceCommit.Tree()
+	if result.TreeHash != sourceTree.Hash {
+		t.Errorf("tree hash = %v, want source tree %v", result.TreeHash, sourceTree.Hash)
+	}
+}
+
+func TestCheckConflictsEmptyBase(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "hello")
+	sourceHash := commitAll(t, repo, dir, "initial")
+
+	result, err := git.CheckConflicts(repo, sourceHash, plumbing.ZeroHash)
+	if err != nil {
+		t.Fatalf("CheckConflicts with empty base: %v", err)
+	}
+	if result.HasConflict {
+		t.Fatal("expected no conflict for empty base")
+	}
+}
+
+func TestResolveDefaultBranch(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main")))
+
+	branch, err := git.ResolveDefaultBranch(repo)
+	if err != nil {
+		t.Fatalf("ResolveDefaultBranch: %v", err)
+	}
+	if branch != "main" {
+		t.Errorf("default branch = %q, want %q", branch, "main")
+	}
+}
+
+func TestResolveDefaultBranchMaster(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("master")))
+
+	branch, err := git.ResolveDefaultBranch(repo)
+	if err != nil {
+		t.Fatalf("ResolveDefaultBranch: %v", err)
+	}
+	if branch != "master" {
+		t.Errorf("default branch = %q, want %q", branch, "master")
+	}
+}
+
+func TestCreateBranchRef(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	writeFile(t, dir, "a.txt", "hello")
+	hash := commitAll(t, repo, dir, "initial")
+
+	if err := git.CreateBranchRef(repo, "new-branch", hash); err != nil {
+		t.Fatalf("CreateBranchRef: %v", err)
+	}
+
+	resolved, err := git.ResolveBranch(repo, "new-branch")
+	if err != nil {
+		t.Fatalf("ResolveBranch after create: %v", err)
+	}
+	if resolved != hash {
+		t.Errorf("branch points to %v, want %v", resolved, hash)
+	}
+}
+
 func commitFromTree(t *testing.T, repo *gogit.Repository, treeHash, parent1, parent2 plumbing.Hash) plumbing.Hash {
 	t.Helper()
 	hash, err := git.MergeCommitFromTree(repo, treeHash, parent1, parent2, "test merge", "Test", "test@test.com")

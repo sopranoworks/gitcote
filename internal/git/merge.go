@@ -51,13 +51,52 @@ func (e *MergeConflictError) Error() string {
 	return fmt.Sprintf("merge conflicts: %s", strings.Join(paths, ", "))
 }
 
+// ResolveDefaultBranch returns the default branch name from HEAD's symbolic
+// target. Works even in empty repos where the branch ref doesn't exist yet.
+func ResolveDefaultBranch(repo *gogit.Repository) (string, error) {
+	head, err := repo.Reference(plumbing.HEAD, false)
+	if err != nil {
+		return "", fmt.Errorf("read HEAD: %w", err)
+	}
+	if head.Type() == plumbing.SymbolicReference {
+		return head.Target().Short(), nil
+	}
+	resolved, err := repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("resolve HEAD: %w", err)
+	}
+	return resolved.Name().Short(), nil
+}
+
+// CreateBranchRef creates a new branch reference pointing to the given hash.
+// Unlike UpdateBranchRef, it does not require the ref to exist beforehand.
+func CreateBranchRef(repo *gogit.Repository, branch string, hash plumbing.Hash) error {
+	refName := plumbing.NewBranchReferenceName(branch)
+	return repo.Storer.SetReference(plumbing.NewHashReference(refName, hash))
+}
+
 // ComputeMerge performs an in-memory 3-way merge between target and source
 // commits. It returns a clean merged tree hash or a list of conflicts.
 // No refs or repository state are modified.
 //
+// When target is ZeroHash (empty base — no commits on target branch), the
+// source tree IS the merged tree. No conflicts are possible.
+//
 // Uses the conservative approach: if both sides modify the same file with
 // different blob hashes, it is reported as a conflict (no line-level merge).
 func ComputeMerge(repo *gogit.Repository, target, source plumbing.Hash) (*MergeResult, error) {
+	if target == plumbing.ZeroHash {
+		sourceCommit, err := repo.CommitObject(source)
+		if err != nil {
+			return nil, fmt.Errorf("resolve source commit: %w", err)
+		}
+		sourceTree, err := sourceCommit.Tree()
+		if err != nil {
+			return nil, fmt.Errorf("source tree: %w", err)
+		}
+		return &MergeResult{Clean: true, TreeHash: sourceTree.Hash}, nil
+	}
+
 	targetCommit, err := repo.CommitObject(target)
 	if err != nil {
 		return nil, fmt.Errorf("resolve target commit: %w", err)

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sopranoworks/gityard/internal/agent"
 	"github.com/sopranoworks/gityard/internal/git"
@@ -48,7 +49,7 @@ func getPRStore(baseDir, namespace, project string) (*pr.Store, error) {
 func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project string, principal auth.Principal, pushOpts []string, ec *eventContext) {
 	opts := parsePushOpts(pushOpts)
 	createPR := false
-	target := "main"
+	target := ""
 	title := ""
 	var sourceBranch string
 
@@ -68,17 +69,23 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 	recordHeadHash(store, namespace, project)
 
 	if !createPR {
-		// Even without create, check if any existing PRs need approval invalidation
-		// (source branch was updated).
 		invalidateApprovalsForPush(store, logger, namespace, project)
 		return
 	}
 
-	// Determine the source branch from repo refs.
 	repo, err := store.OpenRepo(namespace, project)
 	if err != nil {
 		logger.Error("open repo for PR creation", "error", err)
 		return
+	}
+
+	if target == "" {
+		resolved, err := git.ResolveDefaultBranch(repo)
+		if err != nil {
+			logger.Error("resolve default branch", "error", err)
+			return
+		}
+		target = resolved
 	}
 	branches, err := git.ListBranches(repo)
 	if err != nil {
@@ -119,11 +126,7 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 		logger.Error("resolve source branch", "error", err)
 		return
 	}
-	targetHash, err := git.ResolveBranch(repo, target)
-	if err != nil {
-		logger.Error("resolve target branch", "error", err)
-		return
-	}
+	targetHash, _ := git.ResolveBranch(repo, target)
 
 	// Check for existing open PR on same source→target.
 	existing, _ := prStore.FindByBranches(sourceBranch, target)
@@ -189,7 +192,6 @@ func invalidateApprovalsForPush(store *git.Store, logger *slog.Logger, namespace
 		if p.State != pr.StateOpen && p.State != pr.StateApproved {
 			continue
 		}
-		// Check if source or target commit changed.
 		currentSource, _ := git.ResolveBranch(repo, p.SourceBranch)
 		currentTarget, _ := git.ResolveBranch(repo, p.TargetBranch)
 		changed := false
@@ -202,8 +204,9 @@ func invalidateApprovalsForPush(store *git.Store, logger *slog.Logger, namespace
 				p.ApprovedAt = nil
 			}
 		}
-		if currentTarget.String() != p.TargetCommit {
-			p.TargetCommit = currentTarget.String()
+		currentTargetStr := currentTarget.String()
+		if currentTargetStr != p.TargetCommit {
+			p.TargetCommit = currentTargetStr
 			changed = true
 			p.Mergeable = pr.MergeableUnknown
 		}
@@ -224,10 +227,7 @@ func computeMergeableForRepo(store *git.Store, namespace, project, sourceBranch,
 	if err != nil {
 		return pr.MergeableUnknown
 	}
-	targetHash, err := git.ResolveBranch(repo, targetBranch)
-	if err != nil {
-		return pr.MergeableUnknown
-	}
+	targetHash, _ := git.ResolveBranch(repo, targetBranch)
 	result, err := git.CheckConflicts(repo, sourceHash, targetHash)
 	if err != nil {
 		return pr.MergeableUnknown
@@ -266,14 +266,19 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 			return nil, createPROutput{}, fmt.Errorf("open repo: %w", err)
 		}
 
+		if in.TargetBranch == "" {
+			resolved, err := git.ResolveDefaultBranch(repo)
+			if err != nil {
+				return nil, createPROutput{}, fmt.Errorf("resolve default branch: %w", err)
+			}
+			in.TargetBranch = resolved
+		}
+
 		sourceHash, err := git.ResolveBranch(repo, in.SourceBranch)
 		if err != nil {
 			return nil, createPROutput{}, fmt.Errorf("resolve source branch %q: %w", in.SourceBranch, err)
 		}
-		targetHash, err := git.ResolveBranch(repo, in.TargetBranch)
-		if err != nil {
-			return nil, createPROutput{}, fmt.Errorf("resolve target branch %q: %w", in.TargetBranch, err)
-		}
+		targetHash, _ := git.ResolveBranch(repo, in.TargetBranch)
 
 		existing, _ := prStore.FindByBranches(in.SourceBranch, in.TargetBranch)
 		if existing != nil {
@@ -453,10 +458,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if err != nil {
 			return nil, mergePROutput{}, fmt.Errorf("resolve source: %w", err)
 		}
-		targetHash, err := git.ResolveBranch(repo, p.TargetBranch)
-		if err != nil {
-			return nil, mergePROutput{}, fmt.Errorf("resolve target: %w", err)
-		}
+		targetHash, _ := git.ResolveBranch(repo, p.TargetBranch)
 
 		// Re-compute merge at execution time (never trust cached status).
 		mergeResult, err := git.ComputeMerge(repo, targetHash, sourceHash)
@@ -476,14 +478,21 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 			return nil, mergePROutput{}, fmt.Errorf("PR #%d has merge conflicts: %s", in.Number, strings.Join(paths, ", "))
 		}
 
-		msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
-		mergeHash, err := git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
-		if err != nil {
-			return nil, mergePROutput{}, fmt.Errorf("create merge commit: %w", err)
-		}
-
-		if err := git.UpdateBranchRef(repo, p.TargetBranch, mergeHash, targetHash); err != nil {
-			return nil, mergePROutput{}, fmt.Errorf("update target ref: %w", err)
+		var mergeHash plumbing.Hash
+		if targetHash == plumbing.ZeroHash {
+			mergeHash = sourceHash
+			if err := git.CreateBranchRef(repo, p.TargetBranch, sourceHash); err != nil {
+				return nil, mergePROutput{}, fmt.Errorf("create target ref: %w", err)
+			}
+		} else {
+			msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
+			mergeHash, err = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
+			if err != nil {
+				return nil, mergePROutput{}, fmt.Errorf("create merge commit: %w", err)
+			}
+			if err := git.UpdateBranchRef(repo, p.TargetBranch, mergeHash, targetHash); err != nil {
+				return nil, mergePROutput{}, fmt.Errorf("update target ref: %w", err)
+			}
 		}
 
 		recordHeadHash(gitStore, in.Namespace, in.ProjectName)
@@ -712,7 +721,7 @@ type createPRInput struct {
 	Namespace    string   `json:"namespace" jsonschema:"the namespace"`
 	ProjectName  string   `json:"project_name" jsonschema:"required,the project name"`
 	SourceBranch string   `json:"source_branch" jsonschema:"required,the source branch"`
-	TargetBranch string   `json:"target_branch" jsonschema:"required,the target branch"`
+	TargetBranch string   `json:"target_branch,omitempty" jsonschema:"the target branch (defaults to HEAD / default branch)"`
 	Title        string   `json:"title" jsonschema:"required,the PR title"`
 	Description  string   `json:"description,omitempty" jsonschema:"optional description"`
 	OrderFiles   []string `json:"order_files,omitempty" jsonschema:"optional B-47 absolute paths for order/instruction files"`
@@ -831,10 +840,7 @@ func computeMergeResult(gitStore *git.Store, namespace, project, sourceBranch, t
 	if err != nil {
 		return nil, err
 	}
-	targetHash, err := git.ResolveBranch(repo, targetBranch)
-	if err != nil {
-		return nil, err
-	}
+	targetHash, _ := git.ResolveBranch(repo, targetBranch)
 	return git.ComputeMerge(repo, targetHash, sourceHash)
 }
 
@@ -1062,11 +1068,7 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 		c.SendError(fmt.Sprintf("resolve source: %v", err))
 		return
 	}
-	targetHash, err := git.ResolveBranch(repo, pullReq.TargetBranch)
-	if err != nil {
-		c.SendError(fmt.Sprintf("resolve target: %v", err))
-		return
-	}
+	targetHash, _ := git.ResolveBranch(repo, pullReq.TargetBranch)
 
 	mergeResult, err := git.ComputeMerge(repo, targetHash, sourceHash)
 	if err != nil {
@@ -1090,15 +1092,24 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 		return
 	}
 
-	msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", pullReq.Number, pullReq.Title, pullReq.SourceBranch, pullReq.TargetBranch)
-	mergeHash, err := git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
-	if err != nil {
-		c.SendError(fmt.Sprintf("create merge commit: %v", err))
-		return
-	}
-	if err := git.UpdateBranchRef(repo, pullReq.TargetBranch, mergeHash, targetHash); err != nil {
-		c.SendError(fmt.Sprintf("update target ref: %v", err))
-		return
+	var mergeHash plumbing.Hash
+	if targetHash == plumbing.ZeroHash {
+		mergeHash = sourceHash
+		if err := git.CreateBranchRef(repo, pullReq.TargetBranch, sourceHash); err != nil {
+			c.SendError(fmt.Sprintf("create target ref: %v", err))
+			return
+		}
+	} else {
+		msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", pullReq.Number, pullReq.Title, pullReq.SourceBranch, pullReq.TargetBranch)
+		mergeHash, err = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
+		if err != nil {
+			c.SendError(fmt.Sprintf("create merge commit: %v", err))
+			return
+		}
+		if err := git.UpdateBranchRef(repo, pullReq.TargetBranch, mergeHash, targetHash); err != nil {
+			c.SendError(fmt.Sprintf("update target ref: %v", err))
+			return
+		}
 	}
 
 	recordHeadHash(gitStore, p.Namespace, p.ProjectName)
