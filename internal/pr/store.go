@@ -116,7 +116,7 @@ func (s *Store) FindByBranches(source, target string) (*PullRequest, error) {
 				return err
 			}
 			if pr.SourceBranch == source && pr.TargetBranch == target &&
-				(pr.State == StateOpen || pr.State == StateApproved) {
+				pr.State != StateMerged && pr.State != StateClosed {
 				found = &pr
 			}
 			return nil

@@ -12,6 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/gityard/internal/pr"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/authz"
@@ -43,7 +44,7 @@ func getPRStore(baseDir, namespace, project string) (*pr.Store, error) {
 
 // handlePostReceive processes push options after a successful receive-pack.
 // If "pull_request.create" is present, creates or updates a PR.
-func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project string, principal auth.Principal, pushOpts []string) {
+func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project string, principal auth.Principal, pushOpts []string, ec *eventContext) {
 	opts := parsePushOpts(pushOpts)
 	createPR := false
 	target := "main"
@@ -166,6 +167,9 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 		return
 	}
 	logger.Info("pr created", "number", num, "source", sourceBranch, "target", target, "mergeable", mergeable)
+	if ec != nil {
+		go onPRCreated(ec, newPR)
+	}
 }
 
 func invalidateApprovalsForPush(store *git.Store, logger *slog.Logger, namespace, project string) {
@@ -247,7 +251,7 @@ func parsePushOpts(opts []string) map[string]string {
 }
 
 // registerPRTools registers the PR MCP tools.
-func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext) {
+func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext, ec *eventContext) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_pull_requests",
 		Description: "List pull requests for a repository, optionally filtered by state (open/approved/merged/closed).",
@@ -276,6 +280,9 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 			return nil, getPROutput{}, err
 		}
 		out := getPROutput{PullRequest: p}
+		if p.State == pr.StateInterrupted {
+			out.InterruptedPreviousStatus = string(p.PreviousState)
+		}
 		if p.State == pr.StateOpen || p.State == pr.StateApproved {
 			result, mergeErr := computeMergeResult(gitStore, in.Namespace, in.ProjectName, p.SourceBranch, p.TargetBranch)
 			if mergeErr == nil {
@@ -330,6 +337,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if err := prStore.Update(p); err != nil {
 			return nil, approvePROutput{}, err
 		}
+		go onPRApproved(ec, p)
 		return nil, approvePROutput{Number: p.Number, State: string(p.State), ApprovedBy: approver}, nil
 	})
 
@@ -345,8 +353,8 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if err != nil {
 			return nil, mergePROutput{}, err
 		}
-		if p.State != pr.StateApproved {
-			return nil, mergePROutput{}, fmt.Errorf("PR #%d is in state %q, not approved", in.Number, p.State)
+		if p.State != pr.StateApproved && p.State != pr.StateMergeConflict {
+			return nil, mergePROutput{}, fmt.Errorf("PR #%d is in state %q, not approved or merge_conflict", in.Number, p.State)
 		}
 
 		principal, _ := auth.PrincipalFrom(ctx)
@@ -375,6 +383,11 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 			return nil, mergePROutput{}, fmt.Errorf("compute merge: %w", err)
 		}
 		if !mergeResult.Clean {
+			p.State = pr.StateMergeConflict
+			p.Mergeable = pr.MergeableConflict
+			p.UpdatedAt = time.Now()
+			_ = prStore.Update(p)
+			go onPRMergeConflict(ec, p)
 			paths := make([]string, len(mergeResult.Conflicts))
 			for i, c := range mergeResult.Conflicts {
 				paths[i] = c.Path
@@ -469,6 +482,145 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		}
 		return nil, prFilesOutput{Files: files}, nil
 	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "reject_pull_request",
+		Description: "Reject an open pull request with a reason. Fires on_rejected event hook if configured.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in rejectPRInput) (*mcp.CallToolResult, rejectPROutput, error) {
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, rejectPROutput{}, err
+		}
+		p, err := prStore.Get(in.Number)
+		if err != nil {
+			return nil, rejectPROutput{}, err
+		}
+		if p.State != pr.StateOpen {
+			return nil, rejectPROutput{}, fmt.Errorf("PR #%d is in state %q, not open", in.Number, p.State)
+		}
+		p.State = pr.StateRejected
+		p.UpdatedAt = time.Now()
+		if err := prStore.Update(p); err != nil {
+			return nil, rejectPROutput{}, err
+		}
+		go onPRRejected(ec, p)
+		return nil, rejectPROutput{Number: p.Number, State: string(p.State)}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "retry_pr_agent",
+		Description: "Re-spawn the agent that failed on an interrupted PR. Clears interrupted state, restores previous status, then re-spawns. Admin only.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in retryPRAgentInput) (*mcp.CallToolResult, retryPRAgentOutput, error) {
+		principal, hasPrincipal := auth.PrincipalFrom(ctx)
+		if hasPrincipal {
+			if err := authz.Authorize(principal.Scope, in.Namespace, "", authz.LevelAdmin); err != nil {
+				return nil, retryPRAgentOutput{}, fmt.Errorf("admin access required")
+			}
+		}
+
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, retryPRAgentOutput{}, err
+		}
+		p, err := prStore.Get(in.Number)
+		if err != nil {
+			return nil, retryPRAgentOutput{}, err
+		}
+		if p.State != pr.StateInterrupted {
+			return nil, retryPRAgentOutput{}, fmt.Errorf("PR #%d is not interrupted (state: %q)", in.Number, p.State)
+		}
+
+		interruptInfo := p.InterruptInfo
+		previousState := p.PreviousState
+
+		p.State = previousState
+		p.PreviousState = ""
+		p.InterruptInfo = nil
+		p.UpdatedAt = time.Now()
+		if err := prStore.Update(p); err != nil {
+			return nil, retryPRAgentOutput{}, err
+		}
+
+		role := ""
+		if interruptInfo != nil {
+			role = interruptInfo.AgentRole
+		}
+		if role == "" {
+			role = "reviewer"
+		}
+
+		global, _ := ec.integrityHS.GetGlobalPREventSettings()
+		project, _ := ec.integrityHS.GetProjectPREventSettings(in.Namespace, in.ProjectName)
+
+		var globalAction, projectAction *integrity.EventAction
+		switch role {
+		case "reviewer":
+			if global != nil {
+				globalAction = global.OnCreated
+			}
+			if project != nil {
+				projectAction = project.OnCreated
+			}
+		case "coder":
+			if global != nil {
+				globalAction = global.OnRejected
+			}
+			if project != nil {
+				projectAction = project.OnRejected
+			}
+		case "merger":
+			if global != nil {
+				globalAction = global.OnMergeConflict
+			}
+			if project != nil {
+				projectAction = project.OnMergeConflict
+			}
+		}
+
+		action := integrity.ResolveEventAction(projectAction, globalAction)
+		if interruptInfo != nil && interruptInfo.AgentName != "" {
+			action.AgentName = interruptInfo.AgentName
+		}
+		action.AgentEnabled = true
+
+		go spawnAgentForPR(ec, action, p, role)
+
+		return nil, retryPRAgentOutput{Number: p.Number, State: string(p.State), Message: "agent re-spawned"}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "dismiss_pr_interrupt",
+		Description: "Clear interrupted state on a PR without re-spawning the agent. Restores previous status for manual handling. Admin only.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in dismissPRInterruptInput) (*mcp.CallToolResult, dismissPRInterruptOutput, error) {
+		principal, hasPrincipal := auth.PrincipalFrom(ctx)
+		if hasPrincipal {
+			if err := authz.Authorize(principal.Scope, in.Namespace, "", authz.LevelAdmin); err != nil {
+				return nil, dismissPRInterruptOutput{}, fmt.Errorf("admin access required")
+			}
+		}
+
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, dismissPRInterruptOutput{}, err
+		}
+		p, err := prStore.Get(in.Number)
+		if err != nil {
+			return nil, dismissPRInterruptOutput{}, err
+		}
+		if p.State != pr.StateInterrupted {
+			return nil, dismissPRInterruptOutput{}, fmt.Errorf("PR #%d is not interrupted (state: %q)", in.Number, p.State)
+		}
+
+		p.State = p.PreviousState
+		p.PreviousState = ""
+		p.InterruptInfo = nil
+		p.UpdatedAt = time.Now()
+		if err := prStore.Update(p); err != nil {
+			return nil, dismissPRInterruptOutput{}, err
+		}
+
+		return nil, dismissPRInterruptOutput{Number: p.Number, State: string(p.State), Message: "interrupt dismissed"}, nil
+	})
 }
 
 type listPRsInput struct {
@@ -514,8 +666,45 @@ type mergePROutput struct {
 
 type getPROutput struct {
 	*pr.PullRequest
-	IsMergeable bool             `json:"mergeable"`
-	Conflicts   []conflictInfoWire `json:"conflicts,omitempty"`
+	IsMergeable              bool               `json:"mergeable"`
+	Conflicts                []conflictInfoWire `json:"conflicts,omitempty"`
+	InterruptedPreviousStatus string            `json:"interrupted_previous_status,omitempty"`
+}
+
+type rejectPRInput struct {
+	Namespace   string `json:"namespace" jsonschema:"the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+	Number      uint32 `json:"number" jsonschema:"required,the PR number"`
+	Reason      string `json:"reason,omitempty" jsonschema:"optional rejection reason"`
+}
+
+type rejectPROutput struct {
+	Number uint32 `json:"number"`
+	State  string `json:"state"`
+}
+
+type retryPRAgentInput struct {
+	Namespace   string `json:"namespace" jsonschema:"the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+	Number      uint32 `json:"number" jsonschema:"required,the PR number"`
+}
+
+type retryPRAgentOutput struct {
+	Number  uint32 `json:"number"`
+	State   string `json:"state"`
+	Message string `json:"message"`
+}
+
+type dismissPRInterruptInput struct {
+	Namespace   string `json:"namespace" jsonschema:"the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+	Number      uint32 `json:"number" jsonschema:"required,the PR number"`
+}
+
+type dismissPRInterruptOutput struct {
+	Number  uint32 `json:"number"`
+	State   string `json:"state"`
+	Message string `json:"message"`
 }
 
 type conflictInfoWire struct {

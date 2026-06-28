@@ -7,10 +7,13 @@ import "time"
 type PRState string
 
 const (
-	StateOpen     PRState = "open"
-	StateApproved PRState = "approved"
-	StateMerged   PRState = "merged"
-	StateClosed   PRState = "closed"
+	StateOpen          PRState = "open"
+	StateApproved      PRState = "approved"
+	StateRejected      PRState = "rejected"
+	StateMerged        PRState = "merged"
+	StateClosed        PRState = "closed"
+	StateMergeConflict PRState = "merge_conflict"
+	StateInterrupted   PRState = "interrupted"
 )
 
 // Mergeable represents the merge status of a pull request.
@@ -21,6 +24,15 @@ const (
 	MergeableConflict Mergeable = "conflict"
 	MergeableUnknown  Mergeable = "unknown"
 )
+
+// InterruptInfo records why a PR entered the interrupted state.
+type InterruptInfo struct {
+	Reason    string    `json:"reason"`
+	Detail    string    `json:"detail"`
+	AgentName string    `json:"agent_name"`
+	AgentRole string    `json:"agent_role"`
+	At        time.Time `json:"at"`
+}
 
 // PullRequest is the PR entity stored in bbolt.
 type PullRequest struct {
@@ -33,6 +45,7 @@ type PullRequest struct {
 	TargetBranch  string     `json:"target_branch"`
 	Author        string     `json:"author"`
 	State         PRState    `json:"state"`
+	PreviousState PRState    `json:"previous_state,omitempty"`
 	Mergeable     Mergeable  `json:"mergeable"`
 	SourceCommit  string     `json:"source_commit"`
 	TargetCommit  string     `json:"target_commit"`
@@ -41,7 +54,8 @@ type PullRequest struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 	MergedAt      *time.Time `json:"merged_at,omitempty"`
 	ClosedAt      *time.Time `json:"closed_at,omitempty"`
-	ApprovedBy          string     `json:"approved_by,omitempty"`
-	ApprovedAt          *time.Time `json:"approved_at,omitempty"`
-	SourceBranchDeleted bool       `json:"source_branch_deleted,omitempty"`
+	ApprovedBy          string         `json:"approved_by,omitempty"`
+	ApprovedAt          *time.Time     `json:"approved_at,omitempty"`
+	SourceBranchDeleted bool           `json:"source_branch_deleted,omitempty"`
+	InterruptInfo       *InterruptInfo `json:"interrupt_info,omitempty"`
 }

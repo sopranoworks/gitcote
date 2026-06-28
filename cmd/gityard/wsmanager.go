@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/gityard/internal/sshkeys"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/uiws"
@@ -41,13 +42,14 @@ type wsManager struct {
 	sshKeyStore    *sshkeys.Store
 	sshListenAddr  string
 	srvInfoCtx     *serverInfoContext
+	integrityHS    *integrity.Store
 
 	clientsMu sync.RWMutex
 	clients   map[*uiws.Client]struct{}
 }
 
-func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, gitStore *git.Store, sshKeyStore *sshkeys.Store, sshListenAddr string, srvInfo *serverInfoContext, logger *slog.Logger) *wsManager {
-	levels := make(map[uiws.MessageType]uiws.Op, len(uiws.CoreLevels)+len(SeedLevels)+len(NsLevels)+len(ContentLevels)+len(UserSSHKeyLevels)+len(ServerInfoLevels)+len(PRLevels))
+func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, gitStore *git.Store, sshKeyStore *sshkeys.Store, sshListenAddr string, srvInfo *serverInfoContext, hs *integrity.Store, logger *slog.Logger) *wsManager {
+	levels := make(map[uiws.MessageType]uiws.Op, len(uiws.CoreLevels)+len(SeedLevels)+len(NsLevels)+len(ContentLevels)+len(UserSSHKeyLevels)+len(ServerInfoLevels)+len(PRLevels)+len(EventSettingsLevels))
 	for k, v := range uiws.CoreLevels {
 		levels[k] = v
 	}
@@ -69,6 +71,9 @@ func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) boo
 	for k, v := range PRLevels {
 		levels[k] = v
 	}
+	for k, v := range EventSettingsLevels {
+		levels[k] = v
+	}
 
 	return &wsManager{
 		CoreHandlers: core,
@@ -83,6 +88,7 @@ func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) boo
 		sshKeyStore:   sshKeyStore,
 		sshListenAddr: sshListenAddr,
 		srvInfoCtx:    srvInfo,
+		integrityHS:   hs,
 		clients:       make(map[*uiws.Client]struct{}),
 	}
 }
@@ -155,6 +161,10 @@ func (m *wsManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if serverInfoDispatch(client, m.srvInfoCtx, wsMsg.Type, wsMsg.Payload) {
+			continue
+		}
+
+		if eventSettingsDispatch(client, m.integrityHS, wsMsg.Type, wsMsg.Payload) {
 			continue
 		}
 

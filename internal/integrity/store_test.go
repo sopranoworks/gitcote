@@ -136,3 +136,231 @@ func TestAgentWorkdirUpdateNotFound(t *testing.T) {
 		t.Error("expected error for non-existent workdir")
 	}
 }
+
+func TestPREventSettingsGlobalCRUD(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	got, err := s.GetGlobalPREventSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Error("expected nil for unset global settings")
+	}
+
+	enabled := true
+	settings := &integrity.PREventSettings{
+		OnCreated: &integrity.EventAction{
+			AgentEnabled: &enabled,
+			AgentName:    "default_claude_reviewer",
+		},
+	}
+	if err := s.SetGlobalPREventSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err = s.GetGlobalPREventSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil settings")
+	}
+	if got.OnCreated == nil || *got.OnCreated.AgentEnabled != true {
+		t.Error("on_created agent_enabled should be true")
+	}
+	if got.OnCreated.AgentName != "default_claude_reviewer" {
+		t.Errorf("agent_name = %q, want default_claude_reviewer", got.OnCreated.AgentName)
+	}
+}
+
+func TestPREventSettingsProjectOverride(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	enabled := true
+	disabled := false
+	global := &integrity.PREventSettings{
+		OnCreated: &integrity.EventAction{
+			AgentEnabled: &enabled,
+			AgentName:    "default_claude_reviewer",
+		},
+	}
+	if err := s.SetGlobalPREventSettings(global); err != nil {
+		t.Fatal(err)
+	}
+
+	project := &integrity.PREventSettings{
+		OnCreated: &integrity.EventAction{
+			AgentEnabled: &disabled,
+			AgentName:    "reviewer-strict",
+		},
+	}
+	if err := s.SetProjectPREventSettings("ns", "proj", project); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := s.ResolvePREventSettings("ns", "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.OnCreated == nil {
+		t.Fatal("expected on_created in resolved settings")
+	}
+	if *resolved.OnCreated.AgentEnabled != false {
+		t.Error("project override should disable agent")
+	}
+	if resolved.OnCreated.AgentName != "reviewer-strict" {
+		t.Errorf("project override agent_name = %q", resolved.OnCreated.AgentName)
+	}
+
+	if err := s.ClearProjectPREventSettings("ns", "proj"); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err = s.ResolvePREventSettings("ns", "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *resolved.OnCreated.AgentEnabled != true {
+		t.Error("after clear, should fall back to global")
+	}
+}
+
+func TestPREventSettingsResolutionOrder(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	resolved, err := s.ResolvePREventSettings("ns", "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.OnCreated != nil {
+		t.Error("with no settings, on_created should be nil")
+	}
+
+	enabled := true
+	s.SetGlobalPREventSettings(&integrity.PREventSettings{
+		OnCreated: &integrity.EventAction{AgentEnabled: &enabled, AgentName: "global-agent"},
+	})
+
+	resolved, _ = s.ResolvePREventSettings("ns", "proj")
+	if resolved.OnCreated.AgentName != "global-agent" {
+		t.Error("should fall back to global")
+	}
+
+	s.SetProjectPREventSettings("ns", "proj", &integrity.PREventSettings{
+		OnCreated: &integrity.EventAction{AgentEnabled: &enabled, AgentName: "project-agent"},
+	})
+
+	resolved, _ = s.ResolvePREventSettings("ns", "proj")
+	if resolved.OnCreated.AgentName != "project-agent" {
+		t.Error("project should override global")
+	}
+
+	resolved2, _ := s.ResolvePREventSettings("ns", "other")
+	if resolved2.OnCreated.AgentName != "global-agent" {
+		t.Error("other project should still get global")
+	}
+}
+
+func TestResolveEventAction(t *testing.T) {
+	enabled := true
+	disabled := false
+	maxRetries := 3
+
+	r := integrity.ResolveEventAction(nil, nil)
+	if r.AgentEnabled || r.AutoRetry || r.NotifyEnabled {
+		t.Error("defaults should all be false/disabled")
+	}
+	if r.NotifyMethod != "log" {
+		t.Errorf("default notify_method = %q, want log", r.NotifyMethod)
+	}
+
+	global := &integrity.EventAction{
+		AgentEnabled: &enabled,
+		AgentName:    "global-agent",
+		MaxRetries:   &maxRetries,
+		NotifyEnabled: &enabled,
+	}
+	r = integrity.ResolveEventAction(nil, global)
+	if !r.AgentEnabled {
+		t.Error("global agent_enabled should apply")
+	}
+	if r.AgentName != "global-agent" {
+		t.Error("global agent_name should apply")
+	}
+	if r.MaxRetries != 3 {
+		t.Error("global max_retries should apply")
+	}
+
+	project := &integrity.EventAction{
+		AgentEnabled: &disabled,
+		AgentName:    "project-agent",
+	}
+	r = integrity.ResolveEventAction(project, global)
+	if r.AgentEnabled {
+		t.Error("project should override agent_enabled to false")
+	}
+	if r.AgentName != "project-agent" {
+		t.Error("project should override agent_name")
+	}
+	if r.MaxRetries != 3 {
+		t.Error("max_retries should still come from global (project didn't set it)")
+	}
+}
+
+func TestSeedEventSettingsCRUD(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	got, _ := s.GetGlobalSeedEventSettings()
+	if got != nil {
+		t.Error("expected nil for unset")
+	}
+
+	enabled := true
+	settings := &integrity.SeedEventSettings{
+		OnPushConflict: &integrity.EventAction{AgentEnabled: &enabled, AgentName: "merger"},
+	}
+	if err := s.SetGlobalSeedEventSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ = s.GetGlobalSeedEventSettings()
+	if got == nil || got.OnPushConflict == nil {
+		t.Fatal("expected non-nil")
+	}
+	if got.OnPushConflict.AgentName != "merger" {
+		t.Error("agent_name mismatch")
+	}
+
+	if err := s.SetProjectSeedEventSettings("ns", "proj", &integrity.SeedEventSettings{
+		OnPullConflict: &integrity.EventAction{AgentEnabled: &enabled},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, _ := s.ResolveSeedEventSettings("ns", "proj")
+	if resolved.OnPullConflict == nil {
+		t.Error("project override should be returned")
+	}
+
+	s.ClearProjectSeedEventSettings("ns", "proj")
+	resolved, _ = s.ResolveSeedEventSettings("ns", "proj")
+	if resolved.OnPushConflict == nil || resolved.OnPushConflict.AgentName != "merger" {
+		t.Error("should fall back to global after clear")
+	}
+}

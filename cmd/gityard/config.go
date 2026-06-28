@@ -147,10 +147,11 @@ type DebugConfig struct {
 
 // AgentSpawnConfig configures the agent spawn engine.
 type AgentSpawnConfig struct {
-	Enabled        *bool    `yaml:"enabled"`
-	ConfigRoot     string   `yaml:"config_root"`
-	DefaultTimeout Duration `yaml:"default_timeout"`
-	RetainWorkdir  bool     `yaml:"retain_workdir"`
+	Enabled         *bool    `yaml:"enabled"`
+	ConfigRoot      string   `yaml:"config_root"`
+	DefaultTimeout  Duration `yaml:"default_timeout"`
+	ActivityTimeout Duration `yaml:"activity_timeout"`
+	RetainWorkdir   bool     `yaml:"retain_workdir"`
 }
 
 func (a AgentSpawnConfig) IsEnabled() bool {
@@ -159,6 +160,10 @@ func (a AgentSpawnConfig) IsEnabled() bool {
 
 func (a AgentSpawnConfig) TimeoutDuration() time.Duration {
 	return a.DefaultTimeout.Or(30 * time.Minute)
+}
+
+func (a AgentSpawnConfig) ActivityTimeoutDuration() time.Duration {
+	return a.ActivityTimeout.Or(5 * time.Minute)
 }
 
 func (a AgentSpawnConfig) EffectiveConfigRoot(baseDir string) string {

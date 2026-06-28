@@ -163,7 +163,11 @@ func run(cfg *Config, logger *slog.Logger) error {
 			if scope == "" {
 				scope = "*"
 			}
-			return auth.Principal{Name: rec.Principal.Name, Email: rec.Principal.Email, ClientID: rec.ClientID, Scope: scope, ExtraPermissions: rec.ExtraPermissions}, "", true
+			p := auth.Principal{Name: rec.Principal.Name, Email: rec.Principal.Email, ClientID: rec.ClientID, Scope: scope, ExtraPermissions: rec.ExtraPermissions}
+			if IsAgentToken(token) {
+				RecordAgentActivity(token)
+			}
+			return p, "", true
 		}
 	}
 
@@ -208,6 +212,23 @@ func run(cfg *Config, logger *slog.Logger) error {
 		gityardURL: gityardURL,
 	}
 
+	// ---- Repository integrity check (HEAD hash store) ----
+	var integrityHS *integrity.Store
+	integrityHS, err = integrity.Open(filepath.Join(cfg.Storage.BaseDir, "repo_heads.db"))
+	if err != nil {
+		return fmt.Errorf("open integrity store: %w", err)
+	}
+	defer func() { _ = integrityHS.Close() }()
+	headStore = integrityHS
+
+	evtCtx := &eventContext{
+		gitStore:    gitStore,
+		integrityHS: integrityHS,
+		agentCfg:    cfg.AgentSpawn,
+		gityardURL:  gityardURL,
+		logger:      logger,
+	}
+
 	// ---- Smart HTTP handler (/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
 	gitHTTP := git.NewHandler(gitStore, logger)
 	gitHTTP.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
@@ -217,7 +238,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 		logger.Info("post-receive",
 			"namespace", namespace, "project", project,
 			"principal", principal.Email, "push_options", pushOpts)
-		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts)
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, evtCtx)
 	}
 
 	// ---- /ws/ui user/OAuth management (Shoka core handlers, GitYard ws wrapper) ----
@@ -257,15 +278,6 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 	defer func() { _ = sshKeyStore.Close() }()
 
-	// ---- Repository integrity check (HEAD hash store) ----
-	var integrityHS *integrity.Store
-	integrityHS, err = integrity.Open(filepath.Join(cfg.Storage.BaseDir, "repo_heads.db"))
-	if err != nil {
-		return fmt.Errorf("open integrity store: %w", err)
-	}
-	defer func() { _ = integrityHS.Close() }()
-	headStore = integrityHS
-
 	integrityStatus := &IntegrityStatus{}
 
 	srvInfoCtx := &serverInfoContext{
@@ -278,7 +290,8 @@ func run(cfg *Config, logger *slog.Logger) error {
 		sshExternalURL:   cfg.Server.SSH.ExternalURL,
 		integrityStatus:  integrityStatus,
 	}
-	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, srvInfoCtx, logger)
+
+	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, srvInfoCtx, integrityHS, logger)
 
 	// ---- Agent spawn: ensure default configs exist ----
 	if cfg.AgentSpawn.IsEnabled() {
@@ -289,7 +302,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 
 	// ---- MCP server (Git management tools + server info) ----
-	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, gityardURL, integrityHS, logger)
+	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, gityardURL, integrityHS, evtCtx, logger)
 
 	// ---- Seed push scheduler (periodic mode) ----
 	startSeedScheduler(ctx, seedCtx, logger)
@@ -399,7 +412,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 			logger.Info("ssh post-receive",
 				"namespace", namespace, "project", project,
 				"principal", principal.Email, "push_options", pushOpts)
-			handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts)
+			handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, evtCtx)
 		}
 		g.Go(func() error {
 			ln, lerr := net.Listen("tcp", cfg.Server.SSH.Listen)
@@ -458,7 +471,7 @@ func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, 
 
 // setupMCPServer builds the MCP server with GitYard's tool surface: server info,
 // project/repo management (create_project, list_projects).
-func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStore *oauthstore.Store, gityardURL string, integrityHS *integrity.Store, logger *slog.Logger) *mcp.Server {
+func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStore *oauthstore.Store, gityardURL string, integrityHS *integrity.Store, ec *eventContext, logger *slog.Logger) *mcp.Server {
 	mcpServer := mcp.NewServer(
 		&mcp.Implementation{Name: "gityard", Version: version},
 		&mcp.ServerOptions{Logger: logger},
@@ -516,7 +529,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStor
 		return nil, listProjectsOutput{Projects: projects}, nil
 	})
 
-	registerPRTools(mcpServer, gitStore, sc)
+	registerPRTools(mcpServer, gitStore, sc, ec)
 	registerRepoTools(mcpServer, gitStore)
 	registerSeedTools(mcpServer, gitStore, sc.vault, gityardURL)
 	registerTokenTools(mcpServer, gitStore, oauthStore, cfg.Server.HTTP.ExternalURL, cfg.Server.HTTP.Listen)
