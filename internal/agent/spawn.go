@@ -30,6 +30,8 @@ type SpawnContext struct {
 	ShokaMCPURL   string
 	TempCloneDir  string
 	ConflictFiles string
+	OrderFiles    string
+	ResultFiles   string
 	Token         string
 }
 
@@ -192,6 +194,8 @@ func buildVarMap(ctx *SpawnContext, workDir string) map[string]string {
 		"$SHOKA_MCP_URL":   ctx.ShokaMCPURL,
 		"$TEMP_CLONE_DIR":  ctx.TempCloneDir,
 		"$CONFLICT_FILES":  ctx.ConflictFiles,
+		"$ORDER_FILES":     ctx.OrderFiles,
+		"$RESULT_FILES":    ctx.ResultFiles,
 		"$TOKEN":           ctx.Token,
 		"$WORK_DIR":        workDir,
 	}

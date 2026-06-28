@@ -8,8 +8,8 @@ agent:
     Connect to GitYard MCP at $GITYARD_MCP_URL.
     Read the PR diff and review the changes.
 
-    If a directive is available: $DIRECTIVE
-    If a completion report is available: $REPORT
+    Order files (what the coder was told to implement): $ORDER_FILES
+    Result files (what the coder produced): $RESULT_FILES
     (Read these from Shoka MCP at $SHOKA_MCP_URL if available.)
 
     Call approve_pull_request or reject_pull_request when done.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -278,6 +279,8 @@ func executeAgentForPR(ec *eventContext, ac *agent.AgentConfig, p *pr.PullReques
 		SourceBranch:  p.SourceBranch,
 		TargetBranch:  p.TargetBranch,
 		GityardMCPURL: ec.gityardURL + "/mcp",
+		OrderFiles:    strings.Join(p.OrderFiles, ","),
+		ResultFiles:   strings.Join(p.ResultFiles, ","),
 	}
 
 	token, terr := issueAgentToken(ec, p.RepoNamespace, p.RepoProject, int(p.Number), p.SourceBranch, ac.DirName, role)

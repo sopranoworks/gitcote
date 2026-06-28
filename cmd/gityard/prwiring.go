@@ -254,6 +254,80 @@ func parsePushOpts(opts []string) map[string]string {
 // registerPRTools registers the PR MCP tools.
 func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext, ec *eventContext) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "create_pull_request",
+		Description: "Create a pull request. Optionally attach order_files (what the coder was told to implement) and result_files (what the coder produced) as opaque B-47 absolute paths.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in createPRInput) (*mcp.CallToolResult, createPROutput, error) {
+		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, createPROutput{}, err
+		}
+		repo, err := gitStore.OpenRepo(in.Namespace, in.ProjectName)
+		if err != nil {
+			return nil, createPROutput{}, fmt.Errorf("open repo: %w", err)
+		}
+
+		sourceHash, err := git.ResolveBranch(repo, in.SourceBranch)
+		if err != nil {
+			return nil, createPROutput{}, fmt.Errorf("resolve source branch %q: %w", in.SourceBranch, err)
+		}
+		targetHash, err := git.ResolveBranch(repo, in.TargetBranch)
+		if err != nil {
+			return nil, createPROutput{}, fmt.Errorf("resolve target branch %q: %w", in.TargetBranch, err)
+		}
+
+		existing, _ := prStore.FindByBranches(in.SourceBranch, in.TargetBranch)
+		if existing != nil {
+			return nil, createPROutput{}, fmt.Errorf("PR already exists for %s → %s: #%d", in.SourceBranch, in.TargetBranch, existing.Number)
+		}
+
+		principal, _ := auth.PrincipalFrom(ctx)
+		author := principal.Email
+		if author == "" {
+			author = principal.Name
+		}
+		if author == "" {
+			author = "anonymous"
+		}
+
+		orderFiles := in.OrderFiles
+		if orderFiles == nil {
+			orderFiles = []string{}
+		}
+		resultFiles := in.ResultFiles
+		if resultFiles == nil {
+			resultFiles = []string{}
+		}
+
+		mergeable := computeMergeableForRepo(gitStore, in.Namespace, in.ProjectName, in.SourceBranch, in.TargetBranch)
+		now := time.Now()
+		newPR := &pr.PullRequest{
+			RepoNamespace: in.Namespace,
+			RepoProject:   in.ProjectName,
+			Title:         in.Title,
+			Description:   in.Description,
+			SourceBranch:  in.SourceBranch,
+			TargetBranch:  in.TargetBranch,
+			Author:        author,
+			State:         pr.StateOpen,
+			Mergeable:     mergeable,
+			SourceCommit:  sourceHash.String(),
+			TargetCommit:  targetHash.String(),
+			CreatedAt:     now,
+			UpdatedAt:     now,
+			OrderFiles:    orderFiles,
+			ResultFiles:   resultFiles,
+		}
+		num, err := prStore.Create(newPR)
+		if err != nil {
+			return nil, createPROutput{}, err
+		}
+		if ec != nil {
+			go onPRCreated(ec, newPR)
+		}
+		return nil, createPROutput{Number: num, State: string(pr.StateOpen)}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_pull_requests",
 		Description: "List pull requests for a repository, optionally filtered by state (open/approved/merged/closed).",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in listPRsInput) (*mcp.CallToolResult, listPRsOutput, error) {
@@ -279,6 +353,12 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		p, err := prStore.Get(in.Number)
 		if err != nil {
 			return nil, getPROutput{}, err
+		}
+		if p.OrderFiles == nil {
+			p.OrderFiles = []string{}
+		}
+		if p.ResultFiles == nil {
+			p.ResultFiles = []string{}
 		}
 		out := getPROutput{PullRequest: p}
 		if p.State == pr.StateInterrupted {
@@ -628,6 +708,22 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 	})
 }
 
+type createPRInput struct {
+	Namespace    string   `json:"namespace" jsonschema:"the namespace"`
+	ProjectName  string   `json:"project_name" jsonschema:"required,the project name"`
+	SourceBranch string   `json:"source_branch" jsonschema:"required,the source branch"`
+	TargetBranch string   `json:"target_branch" jsonschema:"required,the target branch"`
+	Title        string   `json:"title" jsonschema:"required,the PR title"`
+	Description  string   `json:"description,omitempty" jsonschema:"optional description"`
+	OrderFiles   []string `json:"order_files,omitempty" jsonschema:"optional B-47 absolute paths for order/instruction files"`
+	ResultFiles  []string `json:"result_files,omitempty" jsonschema:"optional B-47 absolute paths for result/report files"`
+}
+
+type createPROutput struct {
+	Number uint32 `json:"number"`
+	State  string `json:"state"`
+}
+
 type listPRsInput struct {
 	Namespace   string `json:"namespace" jsonschema:"the namespace"`
 	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
@@ -891,6 +987,13 @@ func handlePRGet(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
 	if err != nil {
 		c.SendError(err.Error())
 		return
+	}
+
+	if pullReq.OrderFiles == nil {
+		pullReq.OrderFiles = []string{}
+	}
+	if pullReq.ResultFiles == nil {
+		pullReq.ResultFiles = []string{}
 	}
 
 	resp := map[string]interface{}{

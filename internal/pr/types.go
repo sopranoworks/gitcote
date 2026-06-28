@@ -58,4 +58,6 @@ type PullRequest struct {
 	ApprovedAt          *time.Time     `json:"approved_at,omitempty"`
 	SourceBranchDeleted bool           `json:"source_branch_deleted,omitempty"`
 	InterruptInfo       *InterruptInfo `json:"interrupt_info,omitempty"`
+	OrderFiles          []string       `json:"order_files"`
+	ResultFiles         []string       `json:"result_files"`
 }
