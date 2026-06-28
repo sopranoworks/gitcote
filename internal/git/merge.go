@@ -192,14 +192,31 @@ func ComputeMerge(repo *gogit.Repository, target, source plumbing.Hash) (*MergeR
 			if tf.Hash == sf.Hash {
 				entries[path] = object.TreeEntry{Name: baseName(path), Mode: tf.Mode, Hash: tf.Hash}
 			} else {
-				var baseHash plumbing.Hash
-				if e, ok := entries[path]; ok {
-					baseHash = e.Hash
+				// Attempt line-level 3-way merge.
+				var baseContent string
+				if bf, berr := baseTree.File(path); berr == nil {
+					baseContent, _ = bf.Contents()
 				}
-				conflicts = append(conflicts, ConflictEntry{
-					Path: path, Type: "content",
-					Base: baseHash, Ours: tf.Hash, Theirs: sf.Hash,
-				})
+				oursContent, _ := tf.Contents()
+				theirsContent, _ := sf.Contents()
+
+				merged, isConflict := mergeFileContent(baseContent, oursContent, theirsContent)
+				if isConflict {
+					var blobHash plumbing.Hash
+					if e, ok := entries[path]; ok {
+						blobHash = e.Hash
+					}
+					conflicts = append(conflicts, ConflictEntry{
+						Path: path, Type: "content",
+						Base: blobHash, Ours: tf.Hash, Theirs: sf.Hash,
+					})
+				} else {
+					mergedHash, merr := storeBlob(repo.Storer, []byte(merged))
+					if merr != nil {
+						return nil, fmt.Errorf("store merged blob for %q: %w", path, merr)
+					}
+					entries[path] = object.TreeEntry{Name: baseName(path), Mode: tf.Mode, Hash: mergedHash}
+				}
 			}
 		} else if tChanged {
 			switch tc.action {

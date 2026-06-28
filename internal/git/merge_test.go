@@ -2,8 +2,10 @@ package git_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gogit "github.com/go-git/go-git/v6"
@@ -430,6 +432,225 @@ func TestComputeMergeCleanDivergent(t *testing.T) {
 	mergeTree, _ := mergeCommit.Tree()
 	assertFileContent(t, mergeTree, "a.txt", "a-modified")
 	assertFileContent(t, mergeTree, "b.txt", "b-modified")
+}
+
+func TestLineMergeNonOverlapping(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	// 100-line base file
+	var lines []string
+	for i := 1; i <= 100; i++ {
+		lines = append(lines, fmt.Sprintf("line %d\n", i))
+	}
+	base := strings.Join(lines, "")
+	writeFile(t, dir, "f.txt", base)
+	baseHash := commitAll(t, repo, dir, "base")
+
+	// Target: modify lines 10-12
+	oursLines := make([]string, len(lines))
+	copy(oursLines, lines)
+	oursLines[9] = "ours line 10\n"
+	oursLines[10] = "ours line 11\n"
+	oursLines[11] = "ours line 12\n"
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "f.txt", strings.Join(oursLines, ""))
+	targetHash := commitAll(t, repo, dir, "modify lines 10-12")
+
+	// Source: modify lines 80-82 (non-overlapping)
+	theirsLines := make([]string, len(lines))
+	copy(theirsLines, lines)
+	theirsLines[79] = "theirs line 80\n"
+	theirsLines[80] = "theirs line 81\n"
+	theirsLines[81] = "theirs line 82\n"
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "f.txt", strings.Join(theirsLines, ""))
+	sourceHash := commitAll(t, repo, dir, "modify lines 80-82")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if !result.Clean {
+		t.Fatalf("expected clean merge, got conflicts: %v", result.Conflicts)
+	}
+
+	mergeCommit, _ := repo.CommitObject(commitFromTree(t, repo, result.TreeHash, targetHash, sourceHash))
+	mergeTree, _ := mergeCommit.Tree()
+	f, _ := mergeTree.File("f.txt")
+	content, _ := f.Contents()
+	if !strings.Contains(content, "ours line 10") {
+		t.Error("merged content missing ours change")
+	}
+	if !strings.Contains(content, "theirs line 80") {
+		t.Error("merged content missing theirs change")
+	}
+}
+
+func TestLineMergeOverlapping(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	var lines []string
+	for i := 1; i <= 100; i++ {
+		lines = append(lines, fmt.Sprintf("line %d\n", i))
+	}
+	writeFile(t, dir, "f.txt", strings.Join(lines, ""))
+	baseHash := commitAll(t, repo, dir, "base")
+
+	// Target: modify lines 10-20
+	oursLines := make([]string, len(lines))
+	copy(oursLines, lines)
+	for i := 9; i < 20; i++ {
+		oursLines[i] = fmt.Sprintf("ours line %d\n", i+1)
+	}
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "f.txt", strings.Join(oursLines, ""))
+	targetHash := commitAll(t, repo, dir, "modify lines 10-20")
+
+	// Source: modify lines 15-25 (overlaps with ours)
+	theirsLines := make([]string, len(lines))
+	copy(theirsLines, lines)
+	for i := 14; i < 25; i++ {
+		theirsLines[i] = fmt.Sprintf("theirs line %d\n", i+1)
+	}
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "f.txt", strings.Join(theirsLines, ""))
+	sourceHash := commitAll(t, repo, dir, "modify lines 15-25")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if result.Clean {
+		t.Fatal("expected conflict for overlapping changes, got clean merge")
+	}
+	if result.Conflicts[0].Type != "content" {
+		t.Errorf("expected content conflict, got %q", result.Conflicts[0].Type)
+	}
+}
+
+func TestLineMergeInsertElsewhere(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	var lines []string
+	for i := 1; i <= 100; i++ {
+		lines = append(lines, fmt.Sprintf("line %d\n", i))
+	}
+	writeFile(t, dir, "f.txt", strings.Join(lines, ""))
+	baseHash := commitAll(t, repo, dir, "base")
+
+	// Target: insert 5 lines after line 50
+	oursLines := make([]string, 0, 105)
+	oursLines = append(oursLines, lines[:50]...)
+	for i := 0; i < 5; i++ {
+		oursLines = append(oursLines, fmt.Sprintf("inserted %d\n", i+1))
+	}
+	oursLines = append(oursLines, lines[50:]...)
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "f.txt", strings.Join(oursLines, ""))
+	targetHash := commitAll(t, repo, dir, "insert at 50")
+
+	// Source: modify lines 80-85 (doesn't overlap in base coordinates)
+	theirsLines := make([]string, len(lines))
+	copy(theirsLines, lines)
+	for i := 79; i < 85; i++ {
+		theirsLines[i] = fmt.Sprintf("theirs line %d\n", i+1)
+	}
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "f.txt", strings.Join(theirsLines, ""))
+	sourceHash := commitAll(t, repo, dir, "modify lines 80-85")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if !result.Clean {
+		t.Fatalf("expected clean merge, got conflicts: %v", result.Conflicts)
+	}
+
+	mergeCommit, _ := repo.CommitObject(commitFromTree(t, repo, result.TreeHash, targetHash, sourceHash))
+	mergeTree, _ := mergeCommit.Tree()
+	f, _ := mergeTree.File("f.txt")
+	content, _ := f.Contents()
+	if !strings.Contains(content, "inserted 1") {
+		t.Error("merged content missing ours insertion")
+	}
+	if !strings.Contains(content, "theirs line 80") {
+		t.Error("merged content missing theirs modification")
+	}
+}
+
+func TestLineMergeBothInsertSameLocation(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, fmt.Sprintf("line %d\n", i))
+	}
+	writeFile(t, dir, "f.txt", strings.Join(lines, ""))
+	baseHash := commitAll(t, repo, dir, "base")
+
+	// Target: insert after line 10
+	oursLines := make([]string, 0, 22)
+	oursLines = append(oursLines, lines[:10]...)
+	oursLines = append(oursLines, "ours insert A\n", "ours insert B\n")
+	oursLines = append(oursLines, lines[10:]...)
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "f.txt", strings.Join(oursLines, ""))
+	targetHash := commitAll(t, repo, dir, "insert after 10 on target")
+
+	// Source: insert after line 10 (same location, different content)
+	theirsLines := make([]string, 0, 22)
+	theirsLines = append(theirsLines, lines[:10]...)
+	theirsLines = append(theirsLines, "theirs insert X\n", "theirs insert Y\n")
+	theirsLines = append(theirsLines, lines[10:]...)
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "f.txt", strings.Join(theirsLines, ""))
+	sourceHash := commitAll(t, repo, dir, "insert after 10 on source")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if result.Clean {
+		t.Fatal("expected conflict for both inserting at same location")
+	}
+}
+
+func TestLineMergeBinaryFallback(t *testing.T) {
+	repo, dir := initTestRepo(t)
+
+	binaryContent := "some\x00binary\x00data"
+	writeFile(t, dir, "bin.dat", binaryContent)
+	baseHash := commitAll(t, repo, dir, "base")
+
+	createBranch(t, repo, "target", baseHash)
+	checkout(t, repo, "target")
+	writeFile(t, dir, "bin.dat", "target\x00version")
+	targetHash := commitAll(t, repo, dir, "modify binary on target")
+
+	createBranch(t, repo, "source", baseHash)
+	checkout(t, repo, "source")
+	writeFile(t, dir, "bin.dat", "source\x00version")
+	sourceHash := commitAll(t, repo, dir, "modify binary on source")
+
+	result, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		t.Fatalf("ComputeMerge: %v", err)
+	}
+	if result.Clean {
+		t.Fatal("expected conflict for binary file modified on both sides")
+	}
+	if result.Conflicts[0].Type != "content" {
+		t.Errorf("expected content conflict, got %q", result.Conflicts[0].Type)
+	}
 }
 
 func commitFromTree(t *testing.T, repo *gogit.Repository, treeHash, parent1, parent2 plumbing.Hash) plumbing.Hash {
