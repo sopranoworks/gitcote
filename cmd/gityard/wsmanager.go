@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"github.com/gorilla/websocket"
@@ -40,6 +41,9 @@ type wsManager struct {
 	sshKeyStore    *sshkeys.Store
 	sshListenAddr  string
 	srvInfoCtx     *serverInfoContext
+
+	clientsMu sync.RWMutex
+	clients   map[*uiws.Client]struct{}
 }
 
 func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) bool, sc *seedContext, gitStore *git.Store, sshKeyStore *sshkeys.Store, sshListenAddr string, srvInfo *serverInfoContext, logger *slog.Logger) *wsManager {
@@ -71,14 +75,23 @@ func newWSManager(core *uiws.CoreHandlers, originAllowed func(*http.Request) boo
 		upgrader: websocket.Upgrader{
 			CheckOrigin: originAllowed,
 		},
-		logger:      logger,
-		levels:      levels,
-		superOp:     map[uiws.MessageType]bool{},
+		logger:        logger,
+		levels:        levels,
+		superOp:       map[uiws.MessageType]bool{},
 		seedCtx:       sc,
 		gitStore:      gitStore,
 		sshKeyStore:   sshKeyStore,
 		sshListenAddr: sshListenAddr,
 		srvInfoCtx:    srvInfo,
+		clients:       make(map[*uiws.Client]struct{}),
+	}
+}
+
+func (m *wsManager) Broadcast(msgType uiws.MessageType, payload any) {
+	m.clientsMu.RLock()
+	defer m.clientsMu.RUnlock()
+	for c := range m.clients {
+		c.SendResponse(msgType, payload)
 	}
 }
 
@@ -91,6 +104,15 @@ func (m *wsManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	client := uiws.NewClient(conn, fmt.Sprintf("ws-%d", m.connSeq.Add(1)), r)
+
+	m.clientsMu.Lock()
+	m.clients[client] = struct{}{}
+	m.clientsMu.Unlock()
+	defer func() {
+		m.clientsMu.Lock()
+		delete(m.clients, client)
+		m.clientsMu.Unlock()
+	}()
 
 	for {
 		_, message, err := conn.ReadMessage()

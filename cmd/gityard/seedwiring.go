@@ -343,6 +343,7 @@ func handleSeedPullWS(c *uiws.Client, sc *seedContext, payload json.RawMessage) 
 		c.SendResponse(MsgSeedPull, map[string]interface{}{"success": false, "error": err.Error()})
 		return
 	}
+	recordHeadHash(sc.gitStore, p.Namespace, p.ProjectName)
 	c.SendResponse(MsgSeedPull, map[string]interface{}{"success": true})
 }
 
@@ -515,6 +516,7 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 		if err := git.PullFromSeed(repo, cfg.SeedURL, in.Branch, pemData); err != nil {
 			return nil, pullFromSeedOutput{Success: false, Message: err.Error()}, nil
 		}
+		recordHeadHash(gitStore, in.Namespace, in.ProjectName)
 		return nil, pullFromSeedOutput{Success: true, Message: "pulled successfully"}, nil
 	})
 

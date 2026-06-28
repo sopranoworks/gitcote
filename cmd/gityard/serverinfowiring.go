@@ -30,6 +30,7 @@ type serverInfoContext struct {
 	mcpOAuthExtURL  string
 	sshListen       string
 	sshExternalURL  string
+	integrityStatus *IntegrityStatus
 }
 
 func serverInfoDispatch(c *uiws.Client, ctx *serverInfoContext, msgType uiws.MessageType, payload json.RawMessage) bool {
@@ -92,5 +93,21 @@ func handleServerNetworkInfo(c *uiws.Client, ctx *serverInfoContext) {
 		})
 	}
 
-	c.SendResponse(MsgServerNetworkInfo, map[string]any{"elements": elements})
+	resp := map[string]any{"elements": elements}
+
+	if ctx.integrityStatus != nil {
+		lastCheck, reposChecked, mismatchCount, alerts := ctx.integrityStatus.snapshot()
+		var lastCheckStr string
+		if !lastCheck.IsZero() {
+			lastCheckStr = lastCheck.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		resp["integrity"] = map[string]any{
+			"last_check_at":   lastCheckStr,
+			"repos_checked":   reposChecked,
+			"mismatch_count":  mismatchCount,
+			"recent_alerts":   alerts,
+		}
+	}
+
+	c.SendResponse(MsgServerNetworkInfo, resp)
 }

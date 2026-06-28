@@ -23,12 +23,26 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	HTTP  HTTPConfig  `yaml:"http"`
-	SSH   SSHConfig   `yaml:"ssh"`
-	MCP   MCPConfig   `yaml:"mcp"`
-	Auth  AuthConfig  `yaml:"auth"`
-	Log   LogConfig   `yaml:"log"`
-	Debug DebugConfig `yaml:"debug"`
+	HTTP           HTTPConfig           `yaml:"http"`
+	SSH            SSHConfig            `yaml:"ssh"`
+	MCP            MCPConfig            `yaml:"mcp"`
+	Auth           AuthConfig           `yaml:"auth"`
+	Log            LogConfig            `yaml:"log"`
+	Debug          DebugConfig          `yaml:"debug"`
+	IntegrityCheck IntegrityCheckConfig `yaml:"integrity_check"`
+}
+
+type IntegrityCheckConfig struct {
+	Enabled  *bool    `yaml:"enabled"`
+	Interval Duration `yaml:"interval"`
+}
+
+func (c IntegrityCheckConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+func (c IntegrityCheckConfig) IntervalDuration() time.Duration {
+	return c.Interval.Or(60 * time.Second)
 }
 
 type SSHConfig struct {

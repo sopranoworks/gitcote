@@ -63,6 +63,8 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 		}
 	}
 
+	recordHeadHash(store, namespace, project)
+
 	if !createPR {
 		// Even without create, check if any existing PRs need approval invalidation
 		// (source branch was updated).
@@ -389,6 +391,8 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if err := git.UpdateBranchRef(repo, p.TargetBranch, mergeHash, targetHash); err != nil {
 			return nil, mergePROutput{}, fmt.Errorf("update target ref: %w", err)
 		}
+
+		recordHeadHash(gitStore, in.Namespace, in.ProjectName)
 
 		now := time.Now()
 		p.State = pr.StateMerged

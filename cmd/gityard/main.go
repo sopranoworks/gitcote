@@ -24,6 +24,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/gityard/internal/sshd"
 	"github.com/sopranoworks/gityard/internal/sshkeys"
 	"github.com/sopranoworks/gityard/internal/vault"
@@ -249,14 +250,26 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 	defer func() { _ = sshKeyStore.Close() }()
 
+	// ---- Repository integrity check (HEAD hash store) ----
+	var integrityHS *integrity.Store
+	integrityHS, err = integrity.Open(filepath.Join(cfg.Storage.BaseDir, "repo_heads.db"))
+	if err != nil {
+		return fmt.Errorf("open integrity store: %w", err)
+	}
+	defer func() { _ = integrityHS.Close() }()
+	headStore = integrityHS
+
+	integrityStatus := &IntegrityStatus{}
+
 	srvInfoCtx := &serverInfoContext{
 		httpListen:      cfg.Server.HTTP.Listen,
 		httpExternalURL: cfg.Server.HTTP.ExternalURL,
 		mcpPlainListen:  cfg.Server.MCP.Plain.Listen,
 		mcpOAuthListen:  cfg.Server.MCP.OAuth.Listen,
 		mcpOAuthExtURL:  cfg.Server.MCP.OAuth.ExternalURL,
-		sshListen:       cfg.Server.SSH.Listen,
-		sshExternalURL:  cfg.Server.SSH.ExternalURL,
+		sshListen:        cfg.Server.SSH.Listen,
+		sshExternalURL:   cfg.Server.SSH.ExternalURL,
+		integrityStatus:  integrityStatus,
 	}
 	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, srvInfoCtx, logger)
 
@@ -265,6 +278,11 @@ func run(cfg *Config, logger *slog.Logger) error {
 
 	// ---- Seed push scheduler (periodic mode) ----
 	startSeedScheduler(ctx, seedCtx, logger)
+
+	// ---- Repository integrity check worker ----
+	startIntegrityWorker(ctx, gitStore, integrityHS, cfg.Server.IntegrityCheck, integrityStatus, func(alert IntegrityAlert) {
+		wsMgr.Broadcast(MsgRepoIntegrityAlert, alert)
+	}, logger)
 
 	// ---- HTTP listeners ----
 	g, ctx := errgroup.WithContext(ctx)
