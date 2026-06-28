@@ -122,14 +122,18 @@ func ComputeMerge(repo *gogit.Repository, target, source plumbing.Hash) (*MergeR
 	if err != nil {
 		return nil, fmt.Errorf("merge base: %w", err)
 	}
-	if len(bases) == 0 {
-		return nil, fmt.Errorf("no common ancestor between target and source")
-	}
-	base := bases[0]
 
-	baseTree, err := base.Tree()
-	if err != nil {
-		return nil, fmt.Errorf("base tree: %w", err)
+	// No common ancestor: unrelated histories (e.g. orphan branches after
+	// bootstrap merge on an empty repo). Use an empty tree as the base —
+	// equivalent to git merge --allow-unrelated-histories.
+	var baseTree *object.Tree
+	if len(bases) == 0 {
+		baseTree = &object.Tree{}
+	} else {
+		baseTree, err = bases[0].Tree()
+		if err != nil {
+			return nil, fmt.Errorf("base tree: %w", err)
+		}
 	}
 	targetTree, err := targetCommit.Tree()
 	if err != nil {
