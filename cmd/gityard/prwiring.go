@@ -533,6 +533,8 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		interruptInfo := p.InterruptInfo
 		previousState := p.PreviousState
 
+		ensureNoActiveToken(ec, in.Namespace, in.ProjectName, int(in.Number))
+
 		p.State = previousState
 		p.PreviousState = ""
 		p.InterruptInfo = nil
@@ -610,6 +612,8 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if p.State != pr.StateInterrupted {
 			return nil, dismissPRInterruptOutput{}, fmt.Errorf("PR #%d is not interrupted (state: %q)", in.Number, p.State)
 		}
+
+		ensureNoActiveToken(ec, in.Namespace, in.ProjectName, int(in.Number))
 
 		p.State = p.PreviousState
 		p.PreviousState = ""

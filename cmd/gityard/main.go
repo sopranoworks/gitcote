@@ -224,6 +224,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	evtCtx := &eventContext{
 		gitStore:    gitStore,
 		integrityHS: integrityHS,
+		oauthStore:  oauthStore,
 		agentCfg:    cfg.AgentSpawn,
 		gityardURL:  gityardURL,
 		logger:      logger,

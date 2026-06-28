@@ -12,6 +12,7 @@ import (
 	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/gityard/internal/pr"
 	"github.com/sopranoworks/shoka/pkg/authz"
+	"github.com/sopranoworks/shoka/pkg/oauthstore"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 )
 
@@ -44,13 +45,126 @@ func IsAgentToken(token string) bool {
 	return ok
 }
 
+const agentTokenClientID = "gityard-agent"
+
+func agentTokenKey(namespace, project string, prNumber int) string {
+	if prNumber == 0 {
+		return fmt.Sprintf("seed:%s/%s", namespace, project)
+	}
+	return fmt.Sprintf("%s/%s#%d", namespace, project, prNumber)
+}
+
+func taskTypeForRole(role string) string {
+	switch role {
+	case "reviewer":
+		return "pr_review"
+	case "coder":
+		return "pr_fix"
+	case "merger":
+		return "pr_merge"
+	default:
+		return role
+	}
+}
+
+func ensureNoActiveToken(ec *eventContext, namespace, project string, prNumber int) {
+	if ec.oauthStore == nil || ec.integrityHS == nil {
+		return
+	}
+	key := agentTokenKey(namespace, project, prNumber)
+	existing, err := ec.integrityHS.GetAgentToken(key)
+	if err != nil || existing == nil {
+		return
+	}
+	if err := ec.oauthStore.Revoke(existing.SeriesID); err != nil {
+		ec.logger.Warn("failed to revoke stale agent token", "key", key, "error", err)
+	}
+	_ = ec.integrityHS.RemoveAgentToken(key)
+	ec.logger.Warn("revoked stale agent token",
+		"key", key, "old_agent", existing.AgentName, "series", existing.SeriesID)
+}
+
+func issueAgentToken(ec *eventContext, namespace, project string, prNumber int, sourceBranch, agentName, role string) (string, error) {
+	if ec.oauthStore == nil {
+		return "", nil
+	}
+
+	scopeLevel := "r"
+	if role == "coder" {
+		scopeLevel = "rw"
+	}
+	scope := fmt.Sprintf("namespace:%s/%s:%s", namespace, project, scopeLevel)
+
+	var ep map[string]any
+	if role == "coder" || role == "merger" {
+		prefix := sourceBranch + "/"
+		ep = map[string]any{"allowed_branches": []any{prefix}}
+	}
+
+	ttl := ec.agentCfg.TimeoutDuration()
+	now := time.Now()
+	rec, err := ec.oauthStore.NewSeries(
+		agentTokenClientID,
+		oauthstore.Principal{Name: "agent-token", Email: "agent@gityard.local"},
+		"",
+		scope,
+		now,
+		ttl,
+		ttl,
+		ep,
+	)
+	if err != nil {
+		return "", fmt.Errorf("issue agent token: %w", err)
+	}
+
+	key := agentTokenKey(namespace, project, prNumber)
+	tokenRec := integrity.AgentTokenRecord{
+		SeriesID:  rec.SeriesID,
+		Namespace: namespace,
+		Project:   project,
+		PRNumber:  prNumber,
+		TaskType:  taskTypeForRole(role),
+		AgentName: agentName,
+		Role:      role,
+		IssuedAt:  now.UTC().Format(time.RFC3339),
+	}
+	if err := ec.integrityHS.SetAgentToken(key, tokenRec); err != nil {
+		_ = ec.oauthStore.Revoke(rec.SeriesID)
+		return "", fmt.Errorf("store agent token record: %w", err)
+	}
+
+	ec.logger.Info("issued agent token",
+		"key", key, "agent", agentName, "role", role, "scope", scope, "ttl", ttl)
+	return rec.AccessToken, nil
+}
+
+func revokeAgentToken(ec *eventContext, namespace, project string, prNumber int, removeRecord bool) {
+	if ec.oauthStore == nil || ec.integrityHS == nil {
+		return
+	}
+	key := agentTokenKey(namespace, project, prNumber)
+	existing, err := ec.integrityHS.GetAgentToken(key)
+	if err != nil || existing == nil {
+		return
+	}
+	if err := ec.oauthStore.Revoke(existing.SeriesID); err != nil {
+		ec.logger.Warn("failed to revoke agent token", "key", key, "error", err)
+	} else {
+		ec.logger.Info("revoked agent token", "key", key, "series", existing.SeriesID)
+	}
+	if removeRecord {
+		_ = ec.integrityHS.RemoveAgentToken(key)
+	}
+}
+
 // eventContext holds dependencies for event hook processing.
 type eventContext struct {
-	gitStore      *git.Store
-	integrityHS   *integrity.Store
-	agentCfg      AgentSpawnConfig
-	gityardURL    string
-	logger        *slog.Logger
+	gitStore    *git.Store
+	integrityHS *integrity.Store
+	oauthStore  *oauthstore.Store
+	agentCfg    AgentSpawnConfig
+	gityardURL  string
+	logger      *slog.Logger
 }
 
 func notify(method, message string, namespace, project string, prNumber uint32, logger *slog.Logger) {
@@ -125,6 +239,8 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 			ec.logger.Warn("agent retry", "role", role, "attempt", attempt+1, "pr", p.Number)
 		}
 
+		ensureNoActiveToken(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
+
 		result := executeAgentForPR(ec, ac, p, role)
 		if result != nil && result.ExitCode == 0 {
 			return
@@ -163,9 +279,18 @@ func executeAgentForPR(ec *eventContext, ac *agent.AgentConfig, p *pr.PullReques
 		GityardMCPURL: ec.gityardURL + "/mcp",
 	}
 
+	token, terr := issueAgentToken(ec, p.RepoNamespace, p.RepoProject, int(p.Number), p.SourceBranch, ac.DirName, role)
+	if terr != nil {
+		ec.logger.Error("issue agent token", "error", terr, "pr", p.Number, "role", role)
+	}
+	if token != "" {
+		spawnCtx.Token = token
+	}
+
 	workDir, cleanup, err := agent.PrepareWorkDir(ac, spawnCtx)
 	if err != nil {
 		ec.logger.Error("prepare workdir for PR agent", "error", err, "pr", p.Number, "role", role)
+		revokeAgentToken(ec, p.RepoNamespace, p.RepoProject, int(p.Number), true)
 		return nil
 	}
 
@@ -200,13 +325,19 @@ func executeAgentForPR(ec *eventContext, ac *agent.AgentConfig, p *pr.PullReques
 		status = "killed"
 	}
 
-	if result.ExitCode == 0 && !ec.agentCfg.RetainWorkdir {
-		cleanup()
-		if ec.integrityHS != nil {
-			_ = ec.integrityHS.RemoveAgentWorkdir(workDir)
+	if result.ExitCode == 0 {
+		revokeAgentToken(ec, p.RepoNamespace, p.RepoProject, int(p.Number), true)
+		if !ec.agentCfg.RetainWorkdir {
+			cleanup()
+			if ec.integrityHS != nil {
+				_ = ec.integrityHS.RemoveAgentWorkdir(workDir)
+			}
 		}
-	} else if ec.integrityHS != nil {
-		_ = ec.integrityHS.UpdateAgentWorkdir(workDir, status, result.ExitCode)
+	} else {
+		revokeAgentToken(ec, p.RepoNamespace, p.RepoProject, int(p.Number), false)
+		if ec.integrityHS != nil {
+			_ = ec.integrityHS.UpdateAgentWorkdir(workDir, status, result.ExitCode)
+		}
 	}
 
 	return result
@@ -249,7 +380,9 @@ func executeWithActivityTimeout(ec *eventContext, ac *agent.AgentConfig, spawnCt
 			last, ok := agentActivity.Load(spawnCtx.Token)
 			if ok {
 				if time.Since(last.(time.Time)) > activityTimeout {
-					ec.logger.Warn("agent stalled (no MCP activity)", "role", ac.Role, "timeout", activityTimeout)
+					ec.logger.Warn("agent stalled (no MCP activity), revoking token before kill",
+						"role", ac.Role, "timeout", activityTimeout)
+					revokeAgentToken(ec, spawnCtx.Namespace, spawnCtx.Project, spawnCtx.PRNumber, false)
 					return &agent.SpawnResult{
 						ExitCode:   -1,
 						StartedAt:  time.Now(),

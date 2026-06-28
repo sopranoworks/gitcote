@@ -319,6 +319,139 @@ func TestResolveEventAction(t *testing.T) {
 	}
 }
 
+func TestAgentTokenCRUD(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	key := "ns/proj#3"
+	got, err := s.GetAgentToken(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Error("expected nil for unset token")
+	}
+
+	rec := integrity.AgentTokenRecord{
+		SeriesID:  "series-abc",
+		Namespace: "ns",
+		Project:   "proj",
+		PRNumber:  3,
+		TaskType:  "pr_review",
+		AgentName: "default_claude_reviewer",
+		Role:      "reviewer",
+		IssuedAt:  "2026-06-28T12:00:00Z",
+	}
+	if err := s.SetAgentToken(key, rec); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err = s.GetAgentToken(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("expected record")
+	}
+	if got.SeriesID != "series-abc" {
+		t.Errorf("series_id = %q, want series-abc", got.SeriesID)
+	}
+	if got.TaskType != "pr_review" {
+		t.Errorf("task_type = %q, want pr_review", got.TaskType)
+	}
+
+	recs, err := s.ListAgentTokens()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(recs))
+	}
+
+	if err := s.RemoveAgentToken(key); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetAgentToken(key)
+	if got != nil {
+		t.Error("expected nil after removal")
+	}
+}
+
+func TestAgentTokenSeedKey(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	key := "seed:ns/proj"
+	rec := integrity.AgentTokenRecord{
+		SeriesID:  "series-seed",
+		Namespace: "ns",
+		Project:   "proj",
+		TaskType:  "seed_sync",
+		AgentName: "default_claude_merger",
+		Role:      "merger",
+		IssuedAt:  "2026-06-28T12:00:00Z",
+	}
+	if err := s.SetAgentToken(key, rec); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := s.GetAgentToken(key)
+	if got == nil || got.SeriesID != "series-seed" {
+		t.Error("seed key round-trip failed")
+	}
+
+	prKey := "ns/proj#1"
+	prRec := integrity.AgentTokenRecord{
+		SeriesID:  "series-pr",
+		Namespace: "ns",
+		Project:   "proj",
+		PRNumber:  1,
+		TaskType:  "pr_review",
+		AgentName: "reviewer",
+		Role:      "reviewer",
+		IssuedAt:  "2026-06-28T12:00:00Z",
+	}
+	if err := s.SetAgentToken(prKey, prRec); err != nil {
+		t.Fatal(err)
+	}
+
+	recs, _ := s.ListAgentTokens()
+	if len(recs) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(recs))
+	}
+}
+
+func TestAgentTokenOverwrite(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	key := "ns/proj#5"
+	rec1 := integrity.AgentTokenRecord{SeriesID: "old-series", AgentName: "old-agent", IssuedAt: "2026-06-28T12:00:00Z"}
+	rec2 := integrity.AgentTokenRecord{SeriesID: "new-series", AgentName: "new-agent", IssuedAt: "2026-06-28T13:00:00Z"}
+
+	_ = s.SetAgentToken(key, rec1)
+	_ = s.SetAgentToken(key, rec2)
+
+	got, _ := s.GetAgentToken(key)
+	if got == nil || got.SeriesID != "new-series" {
+		t.Error("overwrite should replace old record")
+	}
+
+	recs, _ := s.ListAgentTokens()
+	if len(recs) != 1 {
+		t.Errorf("expected 1 token after overwrite, got %d", len(recs))
+	}
+}
+
 func TestSeedEventSettingsCRUD(t *testing.T) {
 	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
 	if err != nil {

@@ -13,6 +13,7 @@ var (
 	bucketHeads             = []byte("heads")
 	bucketTempClones        = []byte("temp_clones")
 	bucketAgentWorkdirs     = []byte("agent_workdirs")
+	bucketAgentTokens       = []byte("agent_tokens")
 	bucketPREventSettings   = []byte("pr_event_settings")
 	bucketSeedEventSettings = []byte("seed_event_settings")
 )
@@ -29,6 +30,18 @@ type TempCloneRecord struct {
 	Project   string `json:"project"`
 	Path      string `json:"path"`
 	CreatedAt string `json:"created_at"`
+}
+
+// AgentTokenRecord tracks an issued agent token for mutual exclusion.
+type AgentTokenRecord struct {
+	SeriesID  string `json:"series_id"`
+	Namespace string `json:"namespace"`
+	Project   string `json:"project"`
+	PRNumber  int    `json:"pr_number"`
+	TaskType  string `json:"task_type"`
+	AgentName string `json:"agent_name"`
+	Role      string `json:"role"`
+	IssuedAt  string `json:"issued_at"`
 }
 
 // AgentWorkdirRecord tracks an agent working directory for lifecycle management.
@@ -50,7 +63,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open integrity store: %w", err)
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketHeads, bucketTempClones, bucketAgentWorkdirs, bucketPREventSettings, bucketSeedEventSettings} {
+		for _, b := range [][]byte{bucketHeads, bucketTempClones, bucketAgentWorkdirs, bucketAgentTokens, bucketPREventSettings, bucketSeedEventSettings} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -479,4 +492,58 @@ func (s *Store) GetAgentWorkdir(path string) (*AgentWorkdirRecord, error) {
 		return nil
 	})
 	return rec, err
+}
+
+// --- Agent Token Records ---
+
+// GetAgentToken returns the token record for a given key, or nil.
+func (s *Store) GetAgentToken(key string) (*AgentTokenRecord, error) {
+	var rec *AgentTokenRecord
+	err := s.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(bucketAgentTokens).Get([]byte(key))
+		if v == nil {
+			return nil
+		}
+		r := AgentTokenRecord{}
+		if err := json.Unmarshal(v, &r); err != nil {
+			return err
+		}
+		rec = &r
+		return nil
+	})
+	return rec, err
+}
+
+// SetAgentToken stores an agent token record.
+func (s *Store) SetAgentToken(key string, rec AgentTokenRecord) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		data, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		return tx.Bucket(bucketAgentTokens).Put([]byte(key), data)
+	})
+}
+
+// RemoveAgentToken removes an agent token record by key.
+func (s *Store) RemoveAgentToken(key string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketAgentTokens).Delete([]byte(key))
+	})
+}
+
+// ListAgentTokens returns all tracked agent token records.
+func (s *Store) ListAgentTokens() ([]AgentTokenRecord, error) {
+	var recs []AgentTokenRecord
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketAgentTokens).ForEach(func(_, v []byte) error {
+			var rec AgentTokenRecord
+			if err := json.Unmarshal(v, &rec); err != nil {
+				return nil
+			}
+			recs = append(recs, rec)
+			return nil
+		})
+	})
+	return recs, err
 }
