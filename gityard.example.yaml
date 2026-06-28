@@ -103,6 +103,15 @@ server:
     # status. Intended for connect/debug sessions, not steady-state.
     dump_http: false
 
+# Agent spawn engine. Spawns AI coding agents (Claude Code, Gemini CLI, Codex)
+# to review PRs, fix rejected code, and resolve merge conflicts.
+agent_spawn:
+  enabled: true
+  # config_root: /etc/gityard/agents   # where agent.yaml dirs live
+  #                                      # (default: <base_dir>/agents)
+  default_timeout: "30m"                 # hard timeout: kill agent after this
+  retain_workdir: false                  # keep workdir after completion (debugging)
+
 storage:
   base_dir: "~/.gityard"
 

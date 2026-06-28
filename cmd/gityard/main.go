@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/sopranoworks/gityard/internal/agent"
 	"github.com/sopranoworks/gityard/internal/git"
 	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/gityard/internal/sshd"
@@ -279,6 +280,14 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, srvInfoCtx, logger)
 
+	// ---- Agent spawn: ensure default configs exist ----
+	if cfg.AgentSpawn.IsEnabled() {
+		agentConfigRoot := cfg.AgentSpawn.EffectiveConfigRoot(cfg.Storage.BaseDir)
+		if err := agent.EnsureDefaultAgents(agentConfigRoot); err != nil {
+			logger.Warn("failed to ensure default agent configs", "error", err)
+		}
+	}
+
 	// ---- MCP server (Git management tools + server info) ----
 	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, gityardURL, logger)
 
@@ -511,6 +520,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStor
 	registerRepoTools(mcpServer, gitStore)
 	registerSeedTools(mcpServer, gitStore, sc.vault, gityardURL)
 	registerTokenTools(mcpServer, gitStore, oauthStore, cfg.Server.HTTP.ExternalURL, cfg.Server.HTTP.Listen)
+	registerAgentTools(mcpServer, gitStore, cfg.AgentSpawn, cfg.Storage.BaseDir, gityardURL, logger)
 
 	return mcpServer
 }

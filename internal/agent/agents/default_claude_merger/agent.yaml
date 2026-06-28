@@ -1,0 +1,13 @@
+agent:
+  role: merger
+  display_name: "Merger (claude)"
+  command: 'claude -p "$PROMPT"'
+  prompt: |
+    Resolve merge conflicts for PR $PR_ID ($SOURCE_BRANCH → $TARGET_BRANCH).
+
+    Conflicting files: $CONFLICT_FILES
+    Temp clone directory: $TEMP_CLONE_DIR
+
+    1. Inspect the conflicting files
+    2. Resolve each conflict preserving intent from both sides
+    3. Stage resolved files, commit, and push

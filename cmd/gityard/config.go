@@ -17,9 +17,10 @@ import (
 // Step 1 carries only the fields needed to boot the core; Git-hosting / PR fields
 // are added by later steps.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Storage  StorageConfig  `yaml:"storage"`
-	Identity IdentityConfig `yaml:"identity"`
+	Server     ServerConfig     `yaml:"server"`
+	Storage    StorageConfig    `yaml:"storage"`
+	Identity   IdentityConfig   `yaml:"identity"`
+	AgentSpawn AgentSpawnConfig `yaml:"agent_spawn"`
 }
 
 type ServerConfig struct {
@@ -142,6 +143,29 @@ func (f LogFileConfig) RotateDailyEnabled() bool {
 // DebugConfig gates verbose, operator-only diagnostics. Matches Shoka's server.debug.*.
 type DebugConfig struct {
 	DumpHTTP bool `yaml:"dump_http"`
+}
+
+// AgentSpawnConfig configures the agent spawn engine.
+type AgentSpawnConfig struct {
+	Enabled        *bool    `yaml:"enabled"`
+	ConfigRoot     string   `yaml:"config_root"`
+	DefaultTimeout Duration `yaml:"default_timeout"`
+	RetainWorkdir  bool     `yaml:"retain_workdir"`
+}
+
+func (a AgentSpawnConfig) IsEnabled() bool {
+	return a.Enabled == nil || *a.Enabled
+}
+
+func (a AgentSpawnConfig) TimeoutDuration() time.Duration {
+	return a.DefaultTimeout.Or(30 * time.Minute)
+}
+
+func (a AgentSpawnConfig) EffectiveConfigRoot(baseDir string) string {
+	if a.ConfigRoot != "" {
+		return a.ConfigRoot
+	}
+	return filepath.Join(baseDir, "agents")
 }
 
 // Duration is a YAML-friendly time.Duration that accepts Go duration strings
