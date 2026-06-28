@@ -1,0 +1,196 @@
+.container {
+  padding: 0;
+}
+
+.backBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--c-text-dim, #a4abb8);
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 4px 0;
+  margin-bottom: 0.75rem;
+}
+
+.backBtn:hover {
+  color: var(--c-text, #e0e0e0);
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 0.5rem;
+}
+
+.prTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--c-text, #e0e0e0);
+}
+
+.meta {
+  font-size: 0.78rem;
+  color: var(--c-text-dim, #a4abb8);
+  margin-bottom: 1rem;
+}
+
+.description {
+  font-size: 0.85rem;
+  color: var(--c-text, #e0e0e0);
+  padding: 0.75rem;
+  background: var(--c-bg-raised, #2a2a2a);
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  white-space: pre-wrap;
+}
+
+.section {
+  margin-bottom: 1rem;
+}
+
+.sectionTitle {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--c-text, #e0e0e0);
+  margin-bottom: 0.5rem;
+}
+
+.mergeBtn {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.mergeBtn[data-variant='primary'] {
+  background: #238636;
+  color: #fff;
+}
+
+.mergeBtn[data-variant='primary']:hover {
+  background: #2ea043;
+}
+
+.mergeBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.autoMerge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(63, 185, 80, 0.1);
+  border-radius: 4px;
+  font-size: 0.82rem;
+  color: #3fb950;
+}
+
+.conflictSection {
+  padding: 0.75rem;
+  background: rgba(248, 81, 73, 0.08);
+  border: 1px solid rgba(248, 81, 73, 0.2);
+  border-radius: 6px;
+}
+
+.conflictFile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 0.82rem;
+  color: var(--c-text, #e0e0e0);
+}
+
+.conflictType {
+  font-size: 0.72rem;
+  color: #f85149;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(248, 81, 73, 0.15);
+}
+
+.codeBlock {
+  background: var(--c-bg-inset, #1a1a1a);
+  border-radius: 4px;
+  padding: 0.75rem;
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--c-text-dim, #a4abb8);
+  overflow-x: auto;
+  margin-top: 0.5rem;
+  white-space: pre;
+  line-height: 1.5;
+}
+
+.interruptPanel {
+  padding: 0.75rem;
+  background: rgba(248, 81, 73, 0.08);
+  border: 1px solid rgba(248, 81, 73, 0.2);
+  border-radius: 6px;
+}
+
+.interruptHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0.5rem;
+}
+
+.interruptDetail {
+  font-size: 0.82rem;
+  color: var(--c-text, #e0e0e0);
+  margin-bottom: 0.5rem;
+}
+
+.interruptMeta {
+  font-size: 0.75rem;
+  color: var(--c-text-dim, #a4abb8);
+  margin-bottom: 0.75rem;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.actionBtn {
+  padding: 5px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--c-border, #444);
+  background: var(--c-bg-raised, #2a2a2a);
+  color: var(--c-text, #e0e0e0);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.actionBtn:hover {
+  background: var(--c-bg-hover, #333);
+}
+
+.actionBtn[data-variant='danger'] {
+  border-color: rgba(248, 81, 73, 0.3);
+  color: #f85149;
+}
+
+.mergedInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0.5rem 0.75rem;
+  background: rgba(163, 113, 247, 0.08);
+  border-radius: 4px;
+  font-size: 0.82rem;
+  color: #a371f7;
+}

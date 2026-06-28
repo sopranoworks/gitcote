@@ -227,6 +227,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 		oauthStore:  oauthStore,
 		agentCfg:    cfg.AgentSpawn,
 		gityardURL:  gityardURL,
+		seedCtx:     seedCtx,
 		logger:      logger,
 	}
 
@@ -292,7 +293,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 		integrityStatus:  integrityStatus,
 	}
 
-	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, srvInfoCtx, integrityHS, logger)
+	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, srvInfoCtx, integrityHS, evtCtx, logger)
 
 	// ---- Agent spawn: ensure default configs exist ----
 	if cfg.AgentSpawn.IsEnabled() {

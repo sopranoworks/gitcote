@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/sopranoworks/gityard/internal/agent"
 	"github.com/sopranoworks/gityard/internal/git"
 	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/gityard/internal/pr"
@@ -743,16 +744,42 @@ func computeMergeResult(gitStore *git.Store, namespace, project, sourceBranch, t
 
 // --- PR WebSocket handler ---
 
-const MsgPRMergeable uiws.MessageType = "PR_MERGEABLE"
+const (
+	MsgPRMergeable       uiws.MessageType = "PR_MERGEABLE"
+	MsgPRList            uiws.MessageType = "PR_LIST"
+	MsgPRGet             uiws.MessageType = "PR_GET"
+	MsgPRMerge           uiws.MessageType = "PR_MERGE"
+	MsgPRRetryAgent      uiws.MessageType = "PR_RETRY_AGENT"
+	MsgPRDismissInterrupt uiws.MessageType = "PR_DISMISS_INTERRUPT"
+	MsgAgentList         uiws.MessageType = "AGENT_LIST"
+)
 
 var PRLevels = map[uiws.MessageType]uiws.Op{
-	MsgPRMergeable: {Level: authz.LevelRead, Global: false},
+	MsgPRMergeable:        {Level: authz.LevelRead, Global: false},
+	MsgPRList:             {Level: authz.LevelRead, Global: false},
+	MsgPRGet:              {Level: authz.LevelRead, Global: false},
+	MsgPRMerge:            {Level: authz.LevelAdmin, Global: false},
+	MsgPRRetryAgent:       {Level: authz.LevelAdmin, Global: false},
+	MsgPRDismissInterrupt: {Level: authz.LevelAdmin, Global: false},
+	MsgAgentList:          {Level: authz.LevelRead, Global: true},
 }
 
-func prDispatch(c *uiws.Client, gitStore *git.Store, msgType uiws.MessageType, payload json.RawMessage) bool {
+func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType uiws.MessageType, payload json.RawMessage) bool {
 	switch msgType {
 	case MsgPRMergeable:
 		handlePRMergeable(c, gitStore, payload)
+	case MsgPRList:
+		handlePRList(c, gitStore, payload)
+	case MsgPRGet:
+		handlePRGet(c, gitStore, payload)
+	case MsgPRMerge:
+		handlePRMerge(c, gitStore, ec, payload)
+	case MsgPRRetryAgent:
+		handlePRRetryAgent(c, gitStore, ec, payload)
+	case MsgPRDismissInterrupt:
+		handlePRDismissInterrupt(c, gitStore, ec, payload)
+	case MsgAgentList:
+		handleAgentList(c, ec)
 	default:
 		return false
 	}
@@ -809,5 +836,364 @@ func handlePRMergeable(c *uiws.Client, gitStore *git.Store, payload json.RawMess
 		"mergeable": result.Clean,
 		"conflicts": conflicts,
 	})
+}
+
+// --- PR_LIST ---
+
+type prListPayload struct {
+	Namespace   string `json:"namespace"`
+	ProjectName string `json:"projectName"`
+	State       string `json:"state,omitempty"`
+}
+
+func handlePRList(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
+	var p prListPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	prs, err := prStore.List(pr.PRState(p.State))
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	if prs == nil {
+		prs = []pr.PullRequest{}
+	}
+	c.SendResponse(MsgPRList, map[string]interface{}{"pull_requests": prs})
+}
+
+// --- PR_GET ---
+
+type prGetPayload struct {
+	Namespace   string `json:"namespace"`
+	ProjectName string `json:"projectName"`
+	Number      uint32 `json:"number"`
+}
+
+func handlePRGet(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
+	var p prGetPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	pullReq, err := prStore.Get(p.Number)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+
+	resp := map[string]interface{}{
+		"pull_request": pullReq,
+	}
+
+	if pullReq.State == pr.StateInterrupted {
+		resp["interrupted_previous_status"] = string(pullReq.PreviousState)
+	}
+
+	if pullReq.State == pr.StateOpen || pullReq.State == pr.StateApproved || pullReq.State == pr.StateMergeConflict {
+		result, mergeErr := computeMergeResult(gitStore, p.Namespace, p.ProjectName, pullReq.SourceBranch, pullReq.TargetBranch)
+		if mergeErr == nil {
+			resp["mergeable"] = result.Clean
+			conflicts := make([]conflictInfoWire, 0, len(result.Conflicts))
+			for _, cf := range result.Conflicts {
+				conflicts = append(conflicts, conflictInfoWire{Path: cf.Path, Type: cf.Type})
+			}
+			resp["conflicts"] = conflicts
+		}
+	} else if pullReq.State == pr.StateMerged {
+		resp["mergeable"] = true
+		resp["conflicts"] = []conflictInfoWire{}
+	}
+
+	c.SendResponse(MsgPRGet, resp)
+}
+
+// --- PR_MERGE ---
+
+type prMergePayload struct {
+	Namespace   string `json:"namespace"`
+	ProjectName string `json:"projectName"`
+	Number      uint32 `json:"number"`
+}
+
+func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
+	var p prMergePayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	pullReq, err := prStore.Get(p.Number)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	if pullReq.State != pr.StateApproved && pullReq.State != pr.StateMergeConflict {
+		c.SendError(fmt.Sprintf("PR #%d is in state %q, not approved or merge_conflict", p.Number, pullReq.State))
+		return
+	}
+
+	repo, err := gitStore.OpenRepo(p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(fmt.Sprintf("open repo: %v", err))
+		return
+	}
+
+	sourceHash, err := git.ResolveBranch(repo, pullReq.SourceBranch)
+	if err != nil {
+		c.SendError(fmt.Sprintf("resolve source: %v", err))
+		return
+	}
+	targetHash, err := git.ResolveBranch(repo, pullReq.TargetBranch)
+	if err != nil {
+		c.SendError(fmt.Sprintf("resolve target: %v", err))
+		return
+	}
+
+	mergeResult, err := git.ComputeMerge(repo, targetHash, sourceHash)
+	if err != nil {
+		c.SendError(fmt.Sprintf("compute merge: %v", err))
+		return
+	}
+	if !mergeResult.Clean {
+		pullReq.State = pr.StateMergeConflict
+		pullReq.Mergeable = pr.MergeableConflict
+		pullReq.UpdatedAt = time.Now()
+		_ = prStore.Update(pullReq)
+		go onPRMergeConflict(ec, pullReq)
+		conflicts := make([]conflictInfoWire, 0, len(mergeResult.Conflicts))
+		for _, cf := range mergeResult.Conflicts {
+			conflicts = append(conflicts, conflictInfoWire{Path: cf.Path, Type: cf.Type})
+		}
+		c.SendResponse(MsgPRMerge, map[string]interface{}{
+			"error":     fmt.Sprintf("PR #%d has merge conflicts", p.Number),
+			"conflicts": conflicts,
+		})
+		return
+	}
+
+	msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", pullReq.Number, pullReq.Title, pullReq.SourceBranch, pullReq.TargetBranch)
+	mergeHash, err := git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
+	if err != nil {
+		c.SendError(fmt.Sprintf("create merge commit: %v", err))
+		return
+	}
+	if err := git.UpdateBranchRef(repo, pullReq.TargetBranch, mergeHash, targetHash); err != nil {
+		c.SendError(fmt.Sprintf("update target ref: %v", err))
+		return
+	}
+
+	recordHeadHash(gitStore, p.Namespace, p.ProjectName)
+
+	now := time.Now()
+	pullReq.State = pr.StateMerged
+	pullReq.MergeCommit = mergeHash.String()
+	pullReq.MergedAt = &now
+	pullReq.UpdatedAt = now
+	_ = prStore.Update(pullReq)
+
+	sourceBranchDeleted := false
+	if delErr := git.DeleteBranchRef(repo, pullReq.SourceBranch); delErr == nil {
+		sourceBranchDeleted = true
+	}
+	pullReq.SourceBranchDeleted = sourceBranchDeleted
+	_ = prStore.Update(pullReq)
+
+	invalidateApprovalsForPush(gitStore, slog.Default(), p.Namespace, p.ProjectName)
+
+	sc := ec.seedCtx
+	if sc != nil {
+		go triggerOnMergePush(sc, p.Namespace, p.ProjectName, pullReq.TargetBranch)
+	}
+
+	c.SendResponse(MsgPRMerge, map[string]interface{}{
+		"number":                pullReq.Number,
+		"state":                 string(pullReq.State),
+		"merge_commit":          mergeHash.String(),
+		"source_branch_deleted": sourceBranchDeleted,
+	})
+}
+
+// --- PR_RETRY_AGENT ---
+
+type prRetryPayload struct {
+	Namespace   string `json:"namespace"`
+	ProjectName string `json:"projectName"`
+	Number      uint32 `json:"number"`
+	AgentName   string `json:"agentName,omitempty"`
+}
+
+func handlePRRetryAgent(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
+	var p prRetryPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	pullReq, err := prStore.Get(p.Number)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	if pullReq.State != pr.StateInterrupted {
+		c.SendError(fmt.Sprintf("PR #%d is not interrupted (state: %q)", p.Number, pullReq.State))
+		return
+	}
+
+	interruptInfo := pullReq.InterruptInfo
+	previousState := pullReq.PreviousState
+
+	ensureNoActiveToken(ec, p.Namespace, p.ProjectName, int(p.Number))
+
+	pullReq.State = previousState
+	pullReq.PreviousState = ""
+	pullReq.InterruptInfo = nil
+	pullReq.UpdatedAt = time.Now()
+	if err := prStore.Update(pullReq); err != nil {
+		c.SendError(err.Error())
+		return
+	}
+
+	role := ""
+	if interruptInfo != nil {
+		role = interruptInfo.AgentRole
+	}
+	if role == "" {
+		role = "reviewer"
+	}
+
+	global, _ := ec.integrityHS.GetGlobalPREventSettings()
+	project, _ := ec.integrityHS.GetProjectPREventSettings(p.Namespace, p.ProjectName)
+
+	var globalAction, projectAction *integrity.EventAction
+	switch role {
+	case "reviewer":
+		if global != nil {
+			globalAction = global.OnCreated
+		}
+		if project != nil {
+			projectAction = project.OnCreated
+		}
+	case "coder":
+		if global != nil {
+			globalAction = global.OnRejected
+		}
+		if project != nil {
+			projectAction = project.OnRejected
+		}
+	case "merger":
+		if global != nil {
+			globalAction = global.OnMergeConflict
+		}
+		if project != nil {
+			projectAction = project.OnMergeConflict
+		}
+	}
+
+	action := integrity.ResolveEventAction(projectAction, globalAction)
+	if p.AgentName != "" {
+		action.AgentName = p.AgentName
+	} else if interruptInfo != nil && interruptInfo.AgentName != "" {
+		action.AgentName = interruptInfo.AgentName
+	}
+	action.AgentEnabled = true
+
+	go spawnAgentForPR(ec, action, pullReq, role)
+
+	c.SendResponse(MsgPRRetryAgent, map[string]interface{}{
+		"number":  pullReq.Number,
+		"state":   string(pullReq.State),
+		"message": "agent re-spawned",
+	})
+}
+
+// --- PR_DISMISS_INTERRUPT ---
+
+type prDismissPayload struct {
+	Namespace   string `json:"namespace"`
+	ProjectName string `json:"projectName"`
+	Number      uint32 `json:"number"`
+}
+
+func handlePRDismissInterrupt(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
+	var p prDismissPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	pullReq, err := prStore.Get(p.Number)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	if pullReq.State != pr.StateInterrupted {
+		c.SendError(fmt.Sprintf("PR #%d is not interrupted (state: %q)", p.Number, pullReq.State))
+		return
+	}
+
+	ensureNoActiveToken(ec, p.Namespace, p.ProjectName, int(p.Number))
+
+	pullReq.State = pullReq.PreviousState
+	pullReq.PreviousState = ""
+	pullReq.InterruptInfo = nil
+	pullReq.UpdatedAt = time.Now()
+	if err := prStore.Update(pullReq); err != nil {
+		c.SendError(err.Error())
+		return
+	}
+
+	c.SendResponse(MsgPRDismissInterrupt, map[string]interface{}{
+		"number":  pullReq.Number,
+		"state":   string(pullReq.State),
+		"message": "interrupt dismissed",
+	})
+}
+
+// --- AGENT_LIST ---
+
+func handleAgentList(c *uiws.Client, ec *eventContext) {
+	if !ec.agentCfg.IsEnabled() {
+		c.SendResponse(MsgAgentList, map[string]interface{}{"agents": []interface{}{}})
+		return
+	}
+	configRoot := ec.agentCfg.EffectiveConfigRoot(ec.gitStore.BaseDir())
+	configs, err := agent.ScanAgentConfigs(configRoot)
+	if err != nil {
+		c.SendError(fmt.Sprintf("scan agent configs: %v", err))
+		return
+	}
+	agents := make([]map[string]interface{}, 0, len(configs))
+	for _, cfg := range configs {
+		agents = append(agents, map[string]interface{}{
+			"name":         cfg.DirName,
+			"role":         cfg.Role,
+			"display_name": cfg.DisplayName,
+		})
+	}
+	c.SendResponse(MsgAgentList, map[string]interface{}{"agents": agents})
 }
 

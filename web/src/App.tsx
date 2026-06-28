@@ -24,6 +24,7 @@ import { SeedConfigSection } from './components/SeedConfigSection'
 import { SshKeysPage } from './components/SshKeysPage'
 import { UserSshKeysSection } from './components/UserSshKeysSection'
 import { ResumeBanner } from './components/ResumeBanner'
+import { PREventsSettingsGlobal, PREventsSettingsProject } from './components/PREventsSettings'
 
 function SettingsResumeBanner() {
   const item = useRouterState({ select: (s) => (s.location.search as { item?: string }).item })
@@ -52,6 +53,13 @@ const extraSettingsItems: SettingsItem[] = [
     component: SshKeysPage,
     deniedBody: 'You do not have permission to manage deploy keys.',
   },
+  {
+    id: 'pr-events',
+    label: 'PR Events',
+    visible: (v) => v.isSuperUser || v.managesAnyNamespace,
+    component: PREventsSettingsGlobal,
+    deniedBody: 'You do not have permission to manage PR event settings.',
+  },
 ]
 
 const coreConfig: CoreScreensConfig = {
@@ -61,7 +69,10 @@ const coreConfig: CoreScreensConfig = {
     <SshKeySection namespace={namespace} />
   ),
   renderProjectSections: (namespace: string, project: string) => (
-    <SeedConfigSection namespace={namespace} project={project} />
+    <>
+      <SeedConfigSection namespace={namespace} project={project} />
+      <PREventsSettingsProject namespace={namespace} project={project} />
+    </>
   ),
 }
 

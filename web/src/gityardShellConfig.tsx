@@ -7,6 +7,7 @@ import {
 } from '@shoka/web-core'
 import { Toaster } from './components/Toaster'
 import { CloneUrl } from './components/CloneUrl'
+import { PRListSection } from './components/PRListSection'
 
 const EXPLORER_ICON = (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -202,7 +203,12 @@ function deriveActiveRail(pathname: string, rail: string): string {
 }
 
 const gityardContentConfig = {
-  renderProjectExtra: (ns: string, proj: string) => <CloneUrl namespace={ns} project={proj} />,
+  renderProjectExtra: (ns: string, proj: string) => (
+    <>
+      <CloneUrl namespace={ns} project={proj} />
+      <PRListSection namespace={ns} project={proj} />
+    </>
+  ),
 }
 
 function GitYardShellWrapper({ children }: { children: React.ReactNode }) {

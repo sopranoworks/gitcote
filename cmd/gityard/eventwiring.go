@@ -164,6 +164,7 @@ type eventContext struct {
 	oauthStore  *oauthstore.Store
 	agentCfg    AgentSpawnConfig
 	gityardURL  string
+	seedCtx     *seedContext
 	logger      *slog.Logger
 }
 
