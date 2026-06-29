@@ -298,7 +298,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	// Built-in agent configs are served from go:embed; no disk copy needed.
 
 	// ---- MCP server (Git management tools + server info) ----
-	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, gityardURL, integrityHS, evtCtx, logger)
+	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, gityardURL, integrityHS, evtCtx, logger)
 
 	// ---- Seed push scheduler (periodic mode) ----
 	startSeedScheduler(ctx, seedCtx, logger)
@@ -467,7 +467,7 @@ func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, 
 
 // setupMCPServer builds the MCP server with GitYard's tool surface: server info,
 // project/repo management (list_projects).
-func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStore *oauthstore.Store, gityardURL string, integrityHS *integrity.Store, ec *eventContext, logger *slog.Logger) *mcp.Server {
+func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, gityardURL string, integrityHS *integrity.Store, ec *eventContext, logger *slog.Logger) *mcp.Server {
 	mcpServer := mcp.NewServer(
 		&mcp.Implementation{Name: "gityard", Version: version},
 		&mcp.ServerOptions{Logger: logger},
@@ -500,7 +500,6 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStor
 	registerPRTools(mcpServer, gitStore, sc, ec)
 	registerRepoTools(mcpServer, gitStore)
 	registerSeedTools(mcpServer, gitStore, sc.vault, gityardURL)
-	registerTokenTools(mcpServer, gitStore, oauthStore, cfg.Server.HTTP.ExternalURL, cfg.Server.HTTP.Listen)
 
 	return mcpServer
 }

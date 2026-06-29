@@ -451,105 +451,6 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "merge_pull_request",
-		Description: "Merge an approved pull request. Re-computes merge status at execution time and rejects if conflicts exist.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mergePRInput) (*mcp.CallToolResult, mergePROutput, error) {
-		if err := authorizePR(ctx, in.Namespace, in.ProjectName, authz.LevelWrite); err != nil {
-			return nil, mergePROutput{}, fmt.Errorf("access denied")
-		}
-		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
-		if err != nil {
-			return nil, mergePROutput{}, err
-		}
-		p, err := prStore.Get(in.Number)
-		if err != nil {
-			return nil, mergePROutput{}, err
-		}
-		if p.State != pr.StateApproved && p.State != pr.StateMergeConflict {
-			return nil, mergePROutput{}, fmt.Errorf("PR #%d is in state %q, not approved or merge_conflict", in.Number, p.State)
-		}
-
-		principal, _ := auth.PrincipalFrom(ctx)
-		allowed := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
-		if len(allowed) > 0 && !git.MatchesAllowedBranches(p.TargetBranch, allowed) {
-			return nil, mergePROutput{}, fmt.Errorf("token not permitted to merge PRs targeting %q", p.TargetBranch)
-		}
-
-		repo, err := gitStore.OpenRepo(in.Namespace, in.ProjectName)
-		if err != nil {
-			return nil, mergePROutput{}, fmt.Errorf("open repo: %w", err)
-		}
-
-		sourceHash, err := git.ResolveBranch(repo, p.SourceBranch)
-		if err != nil {
-			return nil, mergePROutput{}, fmt.Errorf("resolve source: %w", err)
-		}
-		targetHash, _ := git.ResolveBranch(repo, p.TargetBranch)
-
-		// Re-compute merge at execution time (never trust cached status).
-		mergeResult, err := git.ComputeMerge(repo, targetHash, sourceHash)
-		if err != nil {
-			return nil, mergePROutput{}, fmt.Errorf("compute merge: %w", err)
-		}
-		if !mergeResult.Clean {
-			p.State = pr.StateMergeConflict
-			p.Mergeable = pr.MergeableConflict
-			p.UpdatedAt = time.Now()
-			_ = prStore.Update(p)
-			go onPRMergeConflict(ec, p)
-			paths := make([]string, len(mergeResult.Conflicts))
-			for i, c := range mergeResult.Conflicts {
-				paths[i] = c.Path
-			}
-			return nil, mergePROutput{}, fmt.Errorf("PR #%d has merge conflicts: %s", in.Number, strings.Join(paths, ", "))
-		}
-
-		var mergeHash plumbing.Hash
-		if targetHash == plumbing.ZeroHash {
-			mergeHash = sourceHash
-			if err := git.CreateBranchRef(repo, p.TargetBranch, sourceHash); err != nil {
-				return nil, mergePROutput{}, fmt.Errorf("create target ref: %w", err)
-			}
-		} else {
-			msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
-			mergeHash, err = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
-			if err != nil {
-				return nil, mergePROutput{}, fmt.Errorf("create merge commit: %w", err)
-			}
-			if err := git.UpdateBranchRef(repo, p.TargetBranch, mergeHash, targetHash); err != nil {
-				return nil, mergePROutput{}, fmt.Errorf("update target ref: %w", err)
-			}
-		}
-
-		recordHeadHash(gitStore, in.Namespace, in.ProjectName)
-
-		now := time.Now()
-		p.State = pr.StateMerged
-		p.MergeCommit = mergeHash.String()
-		p.MergedAt = &now
-		p.UpdatedAt = now
-		if err := prStore.Update(p); err != nil {
-			return nil, mergePROutput{}, err
-		}
-
-		// Delete source branch after merge.
-		sourceBranchDeleted := false
-		if delErr := git.DeleteBranchRef(repo, p.SourceBranch); delErr == nil {
-			sourceBranchDeleted = true
-		}
-		p.SourceBranchDeleted = sourceBranchDeleted
-		_ = prStore.Update(p)
-
-		// Invalidate mergeable status on other PRs targeting the same branch.
-		invalidateApprovalsForPush(gitStore, slog.Default(), in.Namespace, in.ProjectName)
-
-		// On-merge push: if configured, push target branch to seed asynchronously.
-		go triggerOnMergePush(sc, in.Namespace, in.ProjectName, p.TargetBranch)
-
-		return nil, mergePROutput{Number: p.Number, State: string(p.State), MergeCommit: mergeHash.String(), SourceBranchDeleted: sourceBranchDeleted}, nil
-	})
-
-	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_pull_request_diff",
 		Description: "Get the unified diff for a pull request (source vs target).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, prDiffOutput, error) {
@@ -794,19 +695,6 @@ type approvePROutput struct {
 	Number     uint32 `json:"number"`
 	State      string `json:"state"`
 	ApprovedBy string `json:"approved_by"`
-}
-
-type mergePRInput struct {
-	Namespace   string `json:"namespace" jsonschema:"the namespace"`
-	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
-	Number      uint32 `json:"number" jsonschema:"required,the PR number"`
-}
-
-type mergePROutput struct {
-	Number              uint32 `json:"number"`
-	State               string `json:"state"`
-	MergeCommit         string `json:"merge_commit"`
-	SourceBranchDeleted bool   `json:"source_branch_deleted"`
 }
 
 type getPROutput struct {
