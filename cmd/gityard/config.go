@@ -148,7 +148,7 @@ type DebugConfig struct {
 // AgentSpawnConfig configures the agent spawn engine.
 type AgentSpawnConfig struct {
 	Enabled         *bool    `yaml:"enabled"`
-	ConfigRoot      string   `yaml:"config_root"`
+	AgentsRoot      string   `yaml:"agents_root"`
 	DefaultTimeout  Duration `yaml:"default_timeout"`
 	ActivityTimeout Duration `yaml:"activity_timeout"`
 	RetainWorkdir   bool     `yaml:"retain_workdir"`
@@ -166,11 +166,8 @@ func (a AgentSpawnConfig) ActivityTimeoutDuration() time.Duration {
 	return a.ActivityTimeout.Or(5 * time.Minute)
 }
 
-func (a AgentSpawnConfig) EffectiveConfigRoot(baseDir string) string {
-	if a.ConfigRoot != "" {
-		return a.ConfigRoot
-	}
-	return filepath.Join(baseDir, "agents")
+func (a AgentSpawnConfig) EffectiveAgentsRoot() string {
+	return a.AgentsRoot
 }
 
 // Duration is a YAML-friendly time.Duration that accepts Go duration strings

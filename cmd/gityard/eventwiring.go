@@ -201,8 +201,8 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 		return
 	}
 
-	configRoot := ec.agentCfg.EffectiveConfigRoot(ec.gitStore.BaseDir())
-	configs, err := agent.ScanAgentConfigs(configRoot)
+	agentsRoot := ec.agentCfg.EffectiveAgentsRoot()
+	configs, err := agent.ScanAgentConfigs(agentsRoot)
 	if err != nil {
 		ec.logger.Error("scan agent configs for PR event", "error", err)
 		prStore, serr := getPRStore(ec.gitStore.BaseDir(), p.RepoNamespace, p.RepoProject)

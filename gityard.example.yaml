@@ -107,8 +107,8 @@ server:
 # to review PRs, fix rejected code, and resolve merge conflicts.
 agent_spawn:
   enabled: true
-  # config_root: /etc/gityard/agents   # where agent.yaml dirs live
-  #                                      # (default: <base_dir>/agents)
+  # agents_root: /etc/gityard/agents   # optional: where user agent.yaml dirs live
+  #                                     # (default: unset — built-in agents only)
   default_timeout: "30m"                 # hard timeout: kill agent after this
   retain_workdir: false                  # keep workdir after completion (debugging)
 

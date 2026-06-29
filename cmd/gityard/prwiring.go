@@ -1300,8 +1300,8 @@ func handleAgentList(c *uiws.Client, ec *eventContext) {
 		c.SendResponse(MsgAgentList, map[string]interface{}{"agents": []interface{}{}})
 		return
 	}
-	configRoot := ec.agentCfg.EffectiveConfigRoot(ec.gitStore.BaseDir())
-	configs, err := agent.ScanAgentConfigs(configRoot)
+	agentsRoot := ec.agentCfg.EffectiveAgentsRoot()
+	configs, err := agent.ScanAgentConfigs(agentsRoot)
 	if err != nil {
 		c.SendError(fmt.Sprintf("scan agent configs: %v", err))
 		return

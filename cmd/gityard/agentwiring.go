@@ -21,7 +21,7 @@ func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawn
 		return
 	}
 
-	configRoot := agentCfg.EffectiveConfigRoot(baseDir)
+	agentsRoot := agentCfg.EffectiveAgentsRoot()
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "spawn_agent",
@@ -34,7 +34,7 @@ func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawn
 			}
 		}
 
-		configs, err := agent.ScanAgentConfigs(configRoot)
+		configs, err := agent.ScanAgentConfigs(agentsRoot)
 		if err != nil {
 			return nil, spawnAgentOutput{}, fmt.Errorf("scan agent configs: %w", err)
 		}
@@ -121,7 +121,7 @@ func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawn
 		Name:        "list_agents",
 		Description: "List available agent configurations.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, _ listAgentsInput) (*mcp.CallToolResult, listAgentsOutput, error) {
-		configs, err := agent.ScanAgentConfigs(configRoot)
+		configs, err := agent.ScanAgentConfigs(agentsRoot)
 		if err != nil {
 			return nil, listAgentsOutput{}, fmt.Errorf("scan agent configs: %w", err)
 		}
