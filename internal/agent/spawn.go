@@ -78,8 +78,9 @@ func WriteMCPConfig(workDir string, servers map[string]MCPServerEntry) error {
 }
 
 type MCPServerEntry struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
+	Type    string            `json:"type"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 func ExecuteAgent(

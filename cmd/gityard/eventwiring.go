@@ -299,8 +299,12 @@ func executeAgentForPR(ec *eventContext, ac *agent.AgentConfig, p *pr.PullReques
 
 	if ec.gityardURL != "" {
 		mcpURL := strings.TrimSuffix(ec.gityardURL, "/") + "/mcp"
+		entry := agent.MCPServerEntry{Type: "http", URL: mcpURL}
+		if token != "" {
+			entry.Headers = map[string]string{"Authorization": "Bearer " + token}
+		}
 		if werr := agent.WriteMCPConfig(workDir, map[string]agent.MCPServerEntry{
-			"gityard": {Type: "http", URL: mcpURL},
+			"gityard": entry,
 		}); werr != nil {
 			ec.logger.Error("write mcp config", "error", werr, "pr", p.Number, "role", role)
 		}

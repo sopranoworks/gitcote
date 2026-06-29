@@ -220,12 +220,13 @@ func run(cfg *Config, logger *slog.Logger) error {
 	defer func() { _ = integrityHS.Close() }()
 	headStore = integrityHS
 
+	agentMCPURL := resolveMCPURL(cfg)
 	evtCtx := &eventContext{
 		gitStore:    gitStore,
 		integrityHS: integrityHS,
 		oauthStore:  oauthStore,
 		agentCfg:    cfg.AgentSpawn,
-		gityardURL:  gityardURL,
+		gityardURL:  agentMCPURL,
 		seedCtx:     seedCtx,
 		logger:      logger,
 	}
@@ -552,6 +553,22 @@ type listProjectsInput struct {
 
 type listProjectsOutput struct {
 	Projects []git.ProjectInfo `json:"projects"`
+}
+
+func resolveMCPURL(cfg *Config) string {
+	if cfg.Server.MCP.OAuth.ExternalURL != "" {
+		return cfg.Server.MCP.OAuth.ExternalURL
+	}
+	if cfg.Server.MCP.OAuth.Listen != "" {
+		return "http://" + cfg.Server.MCP.OAuth.Listen
+	}
+	if cfg.Server.MCP.Plain.ExternalURL != "" {
+		return cfg.Server.MCP.Plain.ExternalURL
+	}
+	if cfg.Server.MCP.Plain.Listen != "" {
+		return "http://" + cfg.Server.MCP.Plain.Listen
+	}
+	return ""
 }
 
 // oauthListenerHandler assembles the OAuth MCP listener: discovery documents and the
