@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,23 +15,19 @@ import (
 )
 
 type SpawnContext struct {
-	PRId          string
-	PRNumber      int
-	Namespace     string
-	Project       string
-	SourceBranch  string
-	TargetBranch  string
-	Directive     string
-	Report        string
-	GityardMCPURL string
-	GityardGitURL string
-	GityardSSHURL string
-	ShokaMCPURL   string
-	TempCloneDir  string
+	PRId         string
+	PRNumber     int
+	Namespace    string
+	Project      string
+	SourceBranch string
+	TargetBranch string
+	Directive    string
+	Report       string
+	TempCloneDir string
 	ConflictFiles string
-	OrderFiles    string
-	ResultFiles   string
-	Token         string
+	OrderFiles   string
+	ResultFiles  string
+	Token        string
 }
 
 type SpawnResult struct {
@@ -60,11 +55,6 @@ func PrepareWorkDir(config *AgentConfig, ctx *SpawnContext) (workDir string, cle
 			cleanup()
 			return "", nil, fmt.Errorf("copy environment_default: %w", err)
 		}
-	}
-
-	if err := generateMCPConfig(workDir, ctx); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("generate .mcp.json: %w", err)
 	}
 
 	return workDir, cleanup, nil
@@ -159,25 +149,6 @@ func ExecuteAgent(
 	}
 }
 
-func generateMCPConfig(workDir string, ctx *SpawnContext) error {
-	servers := map[string]map[string]string{}
-	if ctx.GityardMCPURL != "" {
-		servers["gityard"] = map[string]string{"url": ctx.GityardMCPURL}
-	}
-	if ctx.ShokaMCPURL != "" {
-		servers["shoka"] = map[string]string{"url": ctx.ShokaMCPURL}
-	}
-	if len(servers) == 0 {
-		return nil
-	}
-	cfg := map[string]any{"mcpServers": servers}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(workDir, ".mcp.json"), data, 0o644)
-}
-
 func buildVarMap(ctx *SpawnContext, workDir string) map[string]string {
 	m := map[string]string{
 		"$PR_ID":           ctx.PRId,
@@ -186,13 +157,9 @@ func buildVarMap(ctx *SpawnContext, workDir string) map[string]string {
 		"$PROJECT":         ctx.Project,
 		"$SOURCE_BRANCH":   ctx.SourceBranch,
 		"$TARGET_BRANCH":   ctx.TargetBranch,
-		"$DIRECTIVE":       ctx.Directive,
-		"$REPORT":          ctx.Report,
-		"$GITYARD_MCP_URL": ctx.GityardMCPURL,
-		"$GITYARD_GIT_URL": ctx.GityardGitURL,
-		"$GITYARD_SSH_URL": ctx.GityardSSHURL,
-		"$SHOKA_MCP_URL":   ctx.ShokaMCPURL,
-		"$TEMP_CLONE_DIR":  ctx.TempCloneDir,
+		"$DIRECTIVE":      ctx.Directive,
+		"$REPORT":         ctx.Report,
+		"$TEMP_CLONE_DIR": ctx.TempCloneDir,
 		"$CONFLICT_FILES":  ctx.ConflictFiles,
 		"$ORDER_FILES":     ctx.OrderFiles,
 		"$RESULT_FILES":    ctx.ResultFiles,

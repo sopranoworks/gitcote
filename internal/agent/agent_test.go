@@ -66,7 +66,7 @@ func TestScanAgentConfigs_MalformedYAML(t *testing.T) {
 
 func TestPrepareWorkDir(t *testing.T) {
 	envDir := t.TempDir()
-	os.WriteFile(filepath.Join(envDir, "CLAUDE.md"), []byte("URL: $GITYARD_MCP_URL\nNS: $NAMESPACE\n"), 0o644)
+	os.WriteFile(filepath.Join(envDir, "CLAUDE.md"), []byte("NS: $NAMESPACE\nPR: $PR_ID\n"), 0o644)
 	// Binary file
 	os.WriteFile(filepath.Join(envDir, "binary.dat"), []byte{0x00, 0x01, 0x02, 0x03}, 0o644)
 
@@ -79,8 +79,8 @@ func TestPrepareWorkDir(t *testing.T) {
 	}
 
 	ctx := &SpawnContext{
-		Namespace:     "myns",
-		GityardMCPURL: "http://localhost:8081",
+		Namespace: "myns",
+		PRId:      "myns/proj#1",
 	}
 
 	workDir, cleanup, err := PrepareWorkDir(config, ctx)
@@ -95,11 +95,11 @@ func TestPrepareWorkDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "URL: http://localhost:8081") {
-		t.Errorf("substitution failed, got: %s", content)
-	}
 	if !strings.Contains(content, "NS: myns") {
 		t.Errorf("namespace substitution failed, got: %s", content)
+	}
+	if !strings.Contains(content, "PR: myns/proj#1") {
+		t.Errorf("PR_ID substitution failed, got: %s", content)
 	}
 
 	// Check binary file was NOT substituted (copied as-is)
@@ -110,36 +110,48 @@ func TestPrepareWorkDir(t *testing.T) {
 	if len(binData) != 4 || binData[0] != 0x00 {
 		t.Errorf("binary file was modified")
 	}
+
+	// Verify NO .mcp.json generated
+	if _, err := os.Stat(filepath.Join(workDir, ".mcp.json")); !os.IsNotExist(err) {
+		t.Error(".mcp.json should NOT be generated in workdir")
+	}
 }
 
 func TestVariableSubstitution_AllVars(t *testing.T) {
 	ctx := &SpawnContext{
-		PRId:          "ns/proj#1",
-		PRNumber:      1,
-		Namespace:     "ns",
-		Project:       "proj",
-		SourceBranch:  "feature",
-		TargetBranch:  "main",
-		Directive:     "d.md",
-		Report:        "r.md",
-		GityardMCPURL: "http://g:8081",
-		GityardGitURL: "http://g:8080/ns/proj.git",
-		GityardSSHURL: "git@g:ns/proj.git",
-		ShokaMCPURL:   "http://s:8081",
-		TempCloneDir:  "/tmp/tc",
+		PRId:         "ns/proj#1",
+		PRNumber:     1,
+		Namespace:    "ns",
+		Project:      "proj",
+		SourceBranch: "feature",
+		TargetBranch: "main",
+		Directive:    "d.md",
+		Report:       "r.md",
+		TempCloneDir: "/tmp/tc",
 		ConflictFiles: "a.go,b.go",
-		OrderFiles:    "/shoka/dev/directives/d.md",
-		ResultFiles:   "/shoka/dev/reports/r.md,/shoka/dev/reports/r2.md",
-		Token:         "tok123",
+		OrderFiles:   "/shoka/dev/directives/d.md",
+		ResultFiles:  "/shoka/dev/reports/r.md,/shoka/dev/reports/r2.md",
+		Token:        "tok123",
 	}
 
 	vars := buildVarMap(ctx, "/work")
-	template := "$PR_ID $PR_NUMBER $NAMESPACE $PROJECT $SOURCE_BRANCH $TARGET_BRANCH $DIRECTIVE $REPORT $GITYARD_MCP_URL $GITYARD_GIT_URL $GITYARD_SSH_URL $SHOKA_MCP_URL $TEMP_CLONE_DIR $CONFLICT_FILES $ORDER_FILES $RESULT_FILES $TOKEN $WORK_DIR"
+	template := "$PR_ID $PR_NUMBER $NAMESPACE $PROJECT $SOURCE_BRANCH $TARGET_BRANCH $DIRECTIVE $REPORT $TEMP_CLONE_DIR $CONFLICT_FILES $ORDER_FILES $RESULT_FILES $TOKEN $WORK_DIR"
 	result := substituteVars(template, vars)
 
-	expected := "ns/proj#1 1 ns proj feature main d.md r.md http://g:8081 http://g:8080/ns/proj.git git@g:ns/proj.git http://s:8081 /tmp/tc a.go,b.go /shoka/dev/directives/d.md /shoka/dev/reports/r.md,/shoka/dev/reports/r2.md tok123 /work"
+	expected := "ns/proj#1 1 ns proj feature main d.md r.md /tmp/tc a.go,b.go /shoka/dev/directives/d.md /shoka/dev/reports/r.md,/shoka/dev/reports/r2.md tok123 /work"
 	if result != expected {
 		t.Errorf("got:\n%s\nwant:\n%s", result, expected)
+	}
+}
+
+func TestVariableSubstitution_NoMCPURLVars(t *testing.T) {
+	ctx := &SpawnContext{Namespace: "ns"}
+	vars := buildVarMap(ctx, "/work")
+
+	for _, key := range []string{"$GITYARD_MCP_URL", "$GITYARD_GIT_URL", "$GITYARD_SSH_URL", "$SHOKA_MCP_URL"} {
+		if _, ok := vars[key]; ok {
+			t.Errorf("%s should NOT be in variable map", key)
+		}
 	}
 }
 
@@ -331,6 +343,208 @@ func TestEnsureDefaultAgents_NoOverwrite(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "custom") {
 		t.Error("custom agent.yaml was overwritten")
+	}
+}
+
+func TestPrepareWorkDir_NoMCPJson(t *testing.T) {
+	envDir := t.TempDir()
+	os.WriteFile(filepath.Join(envDir, "CLAUDE.md"), []byte("review PR $PR_ID"), 0o644)
+
+	config := &AgentConfig{
+		DirName: "test_agent",
+		Role:    "reviewer",
+		Command: "echo",
+		Prompt:  "test",
+		EnvDir:  envDir,
+	}
+	ctx := &SpawnContext{
+		PRId:      "ns/proj#1",
+		Namespace: "ns",
+		Project:   "proj",
+	}
+
+	workDir, cleanup, err := PrepareWorkDir(config, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	if _, err := os.Stat(filepath.Join(workDir, ".mcp.json")); !os.IsNotExist(err) {
+		t.Error(".mcp.json must NOT exist in workdir")
+	}
+}
+
+func TestPrepareWorkDir_CleanCLAUDEmd(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureDefaultAgents(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	configs, err := ScanAgentConfigs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reviewer := configs.FindByName("default_claude_reviewer")
+	if reviewer == nil {
+		t.Fatal("default_claude_reviewer not found")
+	}
+
+	ctx := &SpawnContext{
+		PRId:         "ns/proj#1",
+		PRNumber:     1,
+		Namespace:    "ns",
+		Project:      "proj",
+		SourceBranch: "feature",
+		TargetBranch: "main",
+		OrderFiles:   "directives/task.md",
+		ResultFiles:  "reports/complete.md",
+	}
+
+	workDir, cleanup, err := PrepareWorkDir(reviewer, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	claudeMD, err := os.ReadFile(filepath.Join(workDir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(claudeMD)
+
+	for _, banned := range []string{"$GITYARD_MCP_URL", "$SHOKA_MCP_URL", "GITYARD_MCP_URL", "SHOKA_MCP_URL", "shoka", "Shoka"} {
+		if strings.Contains(content, banned) {
+			t.Errorf("CLAUDE.md contains banned reference %q:\n%s", banned, content)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(workDir, ".mcp.json")); !os.IsNotExist(err) {
+		t.Error(".mcp.json must NOT exist in workdir")
+	}
+}
+
+func TestResolvedPrompt_OrderResultFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureDefaultAgents(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	configs, err := ScanAgentConfigs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reviewer := configs.FindByName("default_claude_reviewer")
+	if reviewer == nil {
+		t.Fatal("default_claude_reviewer not found")
+	}
+
+	ctx := &SpawnContext{
+		PRId:         "ns/proj#1",
+		PRNumber:     1,
+		Namespace:    "ns",
+		Project:      "proj",
+		SourceBranch: "feature",
+		TargetBranch: "main",
+		OrderFiles:   "directives/task.md,specs/api.md",
+		ResultFiles:  "reports/complete.md",
+	}
+
+	vars := buildVarMap(ctx, "/work")
+	resolved := substituteVars(reviewer.Prompt, vars)
+
+	if !strings.Contains(resolved, "ns/proj#1") {
+		t.Error("$PR_ID not substituted")
+	}
+	if !strings.Contains(resolved, "directives/task.md,specs/api.md") {
+		t.Error("$ORDER_FILES not substituted")
+	}
+	if !strings.Contains(resolved, "reports/complete.md") {
+		t.Error("$RESULT_FILES not substituted")
+	}
+	if strings.Contains(resolved, "$GITYARD_MCP_URL") {
+		t.Error("prompt still contains $GITYARD_MCP_URL")
+	}
+	if strings.Contains(resolved, "$SHOKA_MCP_URL") {
+		t.Error("prompt still contains $SHOKA_MCP_URL")
+	}
+}
+
+func TestResolvedCommand_BypassPermissions(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureDefaultAgents(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	configs, err := ScanAgentConfigs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reviewer := configs.FindByName("default_claude_reviewer")
+	if reviewer == nil {
+		t.Fatal("default_claude_reviewer not found")
+	}
+
+	ctx := &SpawnContext{
+		PRId:         "ns/proj#1",
+		PRNumber:     1,
+		Namespace:    "ns",
+		Project:      "proj",
+		SourceBranch: "feature",
+		TargetBranch: "main",
+	}
+
+	vars := buildVarMap(ctx, "/work")
+	resolvedPrompt := substituteVars(reviewer.Prompt, vars)
+	vars["$PROMPT"] = resolvedPrompt
+	resolvedCommand := substituteVars(reviewer.Command, vars)
+
+	if !strings.Contains(resolvedCommand, "bypassPermissions") {
+		t.Errorf("command should contain bypassPermissions, got: %s", resolvedCommand)
+	}
+}
+
+func TestDefaultAgentPrompts_NoMCPURLReferences(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureDefaultAgents(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	configs, err := ScanAgentConfigs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	banned := []string{"$GITYARD_MCP_URL", "$GITYARD_GIT_URL", "$GITYARD_SSH_URL", "$SHOKA_MCP_URL", "Shoka"}
+
+	for _, c := range configs {
+		for _, b := range banned {
+			if strings.Contains(c.Prompt, b) {
+				t.Errorf("agent %s prompt contains banned reference %q", c.DirName, b)
+			}
+		}
+
+		if c.EnvDir != "" {
+			entries, err := os.ReadDir(c.EnvDir)
+			if err != nil {
+				t.Errorf("read envdir %s: %v", c.EnvDir, err)
+				continue
+			}
+			for _, e := range entries {
+				data, err := os.ReadFile(filepath.Join(c.EnvDir, e.Name()))
+				if err != nil {
+					continue
+				}
+				content := string(data)
+				for _, b := range banned {
+					if strings.Contains(content, b) {
+						t.Errorf("agent %s file %s contains banned reference %q", c.DirName, e.Name(), b)
+					}
+				}
+			}
+		}
 	}
 }
 

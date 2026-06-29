@@ -6,11 +6,8 @@ agent:
   prompt: |
     Review PR $PR_ID ($SOURCE_BRANCH → $TARGET_BRANCH).
 
-    Connect to GitYard MCP at $GITYARD_MCP_URL.
-    Read the PR diff and review the changes.
-
-    Order files (what the coder was told to implement): $ORDER_FILES
-    Result files (what the coder produced): $RESULT_FILES
-    (Read these from Shoka MCP at $SHOKA_MCP_URL if available.)
+    Use available MCP tools to read the PR diff and files.
+    If order files are provided ($ORDER_FILES), read them for context.
+    If result files are provided ($RESULT_FILES), read them for context.
 
     Call approve_pull_request or reject_pull_request when done.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,7 +16,7 @@ import (
 	"github.com/sopranoworks/shoka/pkg/authz"
 )
 
-func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawnConfig, baseDir string, gityardURL string, hs *integrity.Store, logger *slog.Logger) {
+func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawnConfig, baseDir string, _ string, hs *integrity.Store, logger *slog.Logger) {
 	if !agentCfg.IsEnabled() {
 		return
 	}
@@ -44,14 +45,26 @@ func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawn
 		}
 
 		spawnCtx := &agent.SpawnContext{
-			PRId:          fmt.Sprintf("%s/%s#%d", in.Namespace, in.ProjectName, in.PRNumber),
-			PRNumber:      in.PRNumber,
-			Namespace:     in.Namespace,
-			Project:       in.ProjectName,
-			TargetBranch:  "main",
-			Directive:     in.Directive,
-			Report:        in.Report,
-			GityardMCPURL: gityardURL + "/mcp",
+			PRId:         fmt.Sprintf("%s/%s#%d", in.Namespace, in.ProjectName, in.PRNumber),
+			PRNumber:     in.PRNumber,
+			Namespace:    in.Namespace,
+			Project:      in.ProjectName,
+			TargetBranch: "main",
+			Directive:    in.Directive,
+			Report:       in.Report,
+		}
+
+		if in.PRNumber > 0 {
+			prStore, err := getPRStore(baseDir, in.Namespace, in.ProjectName)
+			if err == nil {
+				p, err := prStore.Get(uint32(in.PRNumber))
+				if err == nil && p != nil {
+					spawnCtx.SourceBranch = p.SourceBranch
+					spawnCtx.TargetBranch = p.TargetBranch
+					spawnCtx.OrderFiles = strings.Join(p.OrderFiles, ",")
+					spawnCtx.ResultFiles = strings.Join(p.ResultFiles, ",")
+				}
+			}
 		}
 
 		workDir, cleanup, err := agent.PrepareWorkDir(ac, spawnCtx)
