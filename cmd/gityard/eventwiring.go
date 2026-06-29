@@ -90,10 +90,7 @@ func issueAgentToken(ec *eventContext, namespace, project string, prNumber int, 
 		return "", nil
 	}
 
-	scopeLevel := "r"
-	if role == "coder" {
-		scopeLevel = "rw"
-	}
+	scopeLevel := "rw"
 	scope := fmt.Sprintf("namespace:%s/%s:%s", namespace, project, scopeLevel)
 
 	var ep map[string]any

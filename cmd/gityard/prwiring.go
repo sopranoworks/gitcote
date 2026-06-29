@@ -251,12 +251,23 @@ func parsePushOpts(opts []string) map[string]string {
 	return m
 }
 
+func authorizePR(ctx context.Context, namespace, project string, level authz.Level) error {
+	principal, hasPrincipal := auth.PrincipalFrom(ctx)
+	if !hasPrincipal {
+		return nil
+	}
+	return authz.Authorize(principal.Scope, namespace, project, level)
+}
+
 // registerPRTools registers the PR MCP tools.
 func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext, ec *eventContext) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "create_pull_request",
 		Description: "Create a pull request. Optionally attach order_files (what the coder was told to implement) and result_files (what the coder produced) as opaque B-47 absolute paths.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in createPRInput) (*mcp.CallToolResult, createPROutput, error) {
+		if err := authorizePR(ctx, in.Namespace, in.ProjectName, authz.LevelWrite); err != nil {
+			return nil, createPROutput{}, fmt.Errorf("access denied")
+		}
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
 			return nil, createPROutput{}, err
@@ -335,7 +346,10 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_pull_requests",
 		Description: "List pull requests for a repository, optionally filtered by state (open/approved/merged/closed).",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in listPRsInput) (*mcp.CallToolResult, listPRsOutput, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listPRsInput) (*mcp.CallToolResult, listPRsOutput, error) {
+		if err := authorizePR(ctx, in.Namespace, in.ProjectName, authz.LevelRead); err != nil {
+			return nil, listPRsOutput{}, fmt.Errorf("access denied")
+		}
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
 			return nil, listPRsOutput{}, err
@@ -350,7 +364,10 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_pull_request",
 		Description: "Get a single pull request by number. Includes computed mergeable status and conflict details.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, getPROutput, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, getPROutput, error) {
+		if err := authorizePR(ctx, in.Namespace, in.ProjectName, authz.LevelRead); err != nil {
+			return nil, getPROutput{}, fmt.Errorf("access denied")
+		}
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
 			return nil, getPROutput{}, err
@@ -390,6 +407,9 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		Name:        "approve_pull_request",
 		Description: "Approve an open pull request. Fails if the PR has conflicts or is not in 'open' state.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in approvePRInput) (*mcp.CallToolResult, approvePROutput, error) {
+		if err := authorizePR(ctx, in.Namespace, in.ProjectName, authz.LevelWrite); err != nil {
+			return nil, approvePROutput{}, fmt.Errorf("access denied")
+		}
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
 			return nil, approvePROutput{}, err
@@ -434,6 +454,9 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		Name:        "merge_pull_request",
 		Description: "Merge an approved pull request. Re-computes merge status at execution time and rejects if conflicts exist.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in mergePRInput) (*mcp.CallToolResult, mergePROutput, error) {
+		if err := authorizePR(ctx, in.Namespace, in.ProjectName, authz.LevelWrite); err != nil {
+			return nil, mergePROutput{}, fmt.Errorf("access denied")
+		}
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
 			return nil, mergePROutput{}, err
@@ -529,7 +552,10 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_pull_request_diff",
 		Description: "Get the unified diff for a pull request (source vs target).",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, prDiffOutput, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, prDiffOutput, error) {
+		if err := authorizePR(ctx, in.Namespace, in.ProjectName, authz.LevelRead); err != nil {
+			return nil, prDiffOutput{}, fmt.Errorf("access denied")
+		}
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
 			return nil, prDiffOutput{}, err
@@ -554,7 +580,10 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_pull_request_files",
 		Description: "List the changed files in a pull request.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, prFilesOutput, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getPRInput) (*mcp.CallToolResult, prFilesOutput, error) {
+		if err := authorizePR(ctx, in.Namespace, in.ProjectName, authz.LevelRead); err != nil {
+			return nil, prFilesOutput{}, fmt.Errorf("access denied")
+		}
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
 			return nil, prFilesOutput{}, err
@@ -580,6 +609,9 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		Name:        "reject_pull_request",
 		Description: "Reject an open pull request with a reason. Fires on_rejected event hook if configured.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in rejectPRInput) (*mcp.CallToolResult, rejectPROutput, error) {
+		if err := authorizePR(ctx, in.Namespace, in.ProjectName, authz.LevelWrite); err != nil {
+			return nil, rejectPROutput{}, fmt.Errorf("access denied")
+		}
 		prStore, err := getPRStore(gitStore.BaseDir(), in.Namespace, in.ProjectName)
 		if err != nil {
 			return nil, rejectPROutput{}, err
