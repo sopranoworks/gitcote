@@ -200,6 +200,79 @@ func TestEmptyRepoPRLifecycle(t *testing.T) {
 	}
 }
 
+func TestEmptyRepoPRMergeableAllStates(t *testing.T) {
+	baseDir := t.TempDir()
+	gitStore := git.NewStore(baseDir)
+	ns, proj := "default", "mergestate"
+
+	if err := gitStore.CreateRepo(ns, proj); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := gitStore.OpenRepo(ns, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projDir := filepath.Join(baseDir, ns, proj)
+	defaultBranch, _ := git.ResolveDefaultBranch(repo)
+
+	writeTestFile(t, projDir, "hello.txt", "hello world\n")
+	commitAllFiles(t, repo, projDir, "feat-1", "add hello.txt")
+
+	repo.Storer.SetReference(plumbing.NewSymbolicReference(
+		plumbing.HEAD, plumbing.NewBranchReferenceName(defaultBranch)))
+
+	prStore, err := pr.Open(filepath.Join(projDir, "prs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prStore.Close()
+
+	targetHash, _ := git.ResolveBranch(repo, defaultBranch)
+	if targetHash != plumbing.ZeroHash {
+		t.Fatalf("expected ZeroHash for empty main, got %v", targetHash)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		state pr.PRState
+	}{
+		{"open", pr.StateOpen},
+		{"approved", pr.StateApproved},
+		{"rejected", pr.StateRejected},
+		{"interrupted", pr.StateInterrupted},
+		{"merge_conflict", pr.StateMergeConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &pr.PullRequest{
+				RepoNamespace: ns,
+				RepoProject:   proj,
+				Title:         "feat-1 " + tc.name,
+				SourceBranch:  "feat-1",
+				TargetBranch:  defaultBranch,
+				Author:        "test",
+				State:         tc.state,
+				Mergeable:     pr.MergeableClean,
+				SourceCommit:  plumbing.ZeroHash.String(),
+				TargetCommit:  plumbing.ZeroHash.String(),
+				CreatedAt:     time.Now(),
+				UpdatedAt:     time.Now(),
+			}
+			if _, err := prStore.Create(p); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := computeMergeResult(gitStore, ns, proj, "feat-1", defaultBranch)
+			if err != nil {
+				t.Fatalf("computeMergeResult: %v", err)
+			}
+			if !result.Clean {
+				t.Fatal("expected clean merge on empty base")
+			}
+		})
+	}
+}
+
 func TestEmptyRepoPRDiffAllAdditions(t *testing.T) {
 	baseDir := t.TempDir()
 	gitStore := git.NewStore(baseDir)

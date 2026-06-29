@@ -369,7 +369,12 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if p.State == pr.StateInterrupted {
 			out.InterruptedPreviousStatus = string(p.PreviousState)
 		}
-		if p.State == pr.StateOpen || p.State == pr.StateApproved {
+		switch p.State {
+		case pr.StateMerged:
+			out.IsMergeable = true
+		case pr.StateClosed:
+			// leave IsMergeable as false
+		default:
 			result, mergeErr := computeMergeResult(gitStore, in.Namespace, in.ProjectName, p.SourceBranch, p.TargetBranch)
 			if mergeErr == nil {
 				out.IsMergeable = result.Clean
@@ -377,8 +382,6 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 					out.Conflicts = append(out.Conflicts, conflictInfoWire{Path: c.Path, Type: c.Type})
 				}
 			}
-		} else if p.State == pr.StateMerged {
-			out.IsMergeable = true
 		}
 		return nil, out, nil
 	})
@@ -1010,7 +1013,13 @@ func handlePRGet(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
 		resp["interrupted_previous_status"] = string(pullReq.PreviousState)
 	}
 
-	if pullReq.State == pr.StateOpen || pullReq.State == pr.StateApproved || pullReq.State == pr.StateMergeConflict {
+	switch pullReq.State {
+	case pr.StateMerged:
+		resp["mergeable"] = true
+		resp["conflicts"] = []conflictInfoWire{}
+	case pr.StateClosed:
+		// leave mergeable unset
+	default:
 		result, mergeErr := computeMergeResult(gitStore, p.Namespace, p.ProjectName, pullReq.SourceBranch, pullReq.TargetBranch)
 		if mergeErr == nil {
 			resp["mergeable"] = result.Clean
@@ -1020,9 +1029,6 @@ func handlePRGet(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
 			}
 			resp["conflicts"] = conflicts
 		}
-	} else if pullReq.State == pr.StateMerged {
-		resp["mergeable"] = true
-		resp["conflicts"] = []conflictInfoWire{}
 	}
 
 	c.SendResponse(MsgPRGet, resp)

@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -65,6 +66,20 @@ func PrepareWorkDir(config *AgentConfig, ctx *SpawnContext) (workDir string, cle
 	}
 
 	return workDir, cleanup, nil
+}
+
+func WriteMCPConfig(workDir string, servers map[string]MCPServerEntry) error {
+	config := map[string]any{"mcpServers": servers}
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(workDir, ".mcp.json"), data, 0o644)
+}
+
+type MCPServerEntry struct {
+	Type string `json:"type"`
+	URL  string `json:"url"`
 }
 
 func ExecuteAgent(

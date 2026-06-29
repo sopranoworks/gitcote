@@ -297,6 +297,15 @@ func executeAgentForPR(ec *eventContext, ac *agent.AgentConfig, p *pr.PullReques
 		return nil
 	}
 
+	if ec.gityardURL != "" {
+		mcpURL := strings.TrimSuffix(ec.gityardURL, "/") + "/mcp"
+		if werr := agent.WriteMCPConfig(workDir, map[string]agent.MCPServerEntry{
+			"gityard": {Type: "http", URL: mcpURL},
+		}); werr != nil {
+			ec.logger.Error("write mcp config", "error", werr, "pr", p.Number, "role", role)
+		}
+	}
+
 	if ec.integrityHS != nil {
 		_ = ec.integrityHS.AddAgentWorkdir(integrity.AgentWorkdirRecord{
 			Path:      workDir,

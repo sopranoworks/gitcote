@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -232,23 +231,9 @@ func (m *MockMCPServer) HasCall(tool string) bool {
 }
 
 func writeMockMCPConfig(workDir, mockURL string) error {
-	claudeDir := filepath.Join(workDir, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		return err
-	}
-	config := map[string]any{
-		"mcpServers": map[string]any{
-			"gityard": map[string]any{
-				"type": "url",
-				"url":  mockURL,
-			},
-		},
-	}
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(claudeDir, "mcp.json"), data, 0o644)
+	return WriteMCPConfig(workDir, map[string]MCPServerEntry{
+		"gityard": {Type: "http", URL: mockURL},
+	})
 }
 
 func readLog(path string) string {
@@ -322,18 +307,8 @@ func TestReviewerLoopE2E(t *testing.T) {
 		t.Fatalf("git init in workdir: %v\n%s", err, out)
 	}
 
-	// 6. Inject --strict-mcp-config for test isolation (test-only concern:
-	// prevents user-level MCP config from interfering with the mock)
-	mcpConfigPath := filepath.Join(workDir, ".claude", "mcp.json")
-	reviewerConfig.Command = strings.Replace(
-		reviewerConfig.Command,
-		"-p",
-		fmt.Sprintf("--strict-mcp-config --mcp-config %s -p", mcpConfigPath),
-		1,
-	)
-
 	t.Logf("workdir: %s", workDir)
-	t.Logf("mcp config: %s", mcpConfigPath)
+	t.Logf("mcp config: %s", filepath.Join(workDir, ".mcp.json"))
 	t.Logf("command: %s", reviewerConfig.Command)
 
 	// 7. Execute agent (real claude, timeout 2 min)
