@@ -465,7 +465,7 @@ func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, 
 }
 
 // setupMCPServer builds the MCP server with GitYard's tool surface: server info,
-// project/repo management (create_project, list_projects).
+// project/repo management (list_projects).
 func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStore *oauthstore.Store, gityardURL string, integrityHS *integrity.Store, ec *eventContext, logger *slog.Logger) *mcp.Server {
 	mcpServer := mcp.NewServer(
 		&mcp.Implementation{Name: "gityard", Version: version},
@@ -483,35 +483,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStor
 		}, nil
 	})
 
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "create_project",
-		Description: "Create a new bare Git repository under a namespace. Optionally clone from a seed URL (HTTP or SSH). SSH clone uses the namespace's deploy key.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, createProjectOutput, error) {
-		if in.CloneURL != "" {
-			if isSSHURL(in.CloneURL) {
-				pemData, kerr := resolveDeployKey(sc, in.Namespace, in.KeyName)
-				if kerr != nil {
-					return nil, createProjectOutput{}, kerr
-				}
-				if err := gitStore.CloneRepoSSH(in.Namespace, in.ProjectName, in.CloneURL, pemData); err != nil {
-					return nil, createProjectOutput{}, fmt.Errorf("clone (SSH): %w", err)
-				}
-			} else {
-				if err := gitStore.CloneRepo(in.Namespace, in.ProjectName, in.CloneURL); err != nil {
-					return nil, createProjectOutput{}, fmt.Errorf("clone: %w", err)
-				}
-			}
-		} else {
-			if err := gitStore.CreateRepo(in.Namespace, in.ProjectName); err != nil {
-				return nil, createProjectOutput{}, fmt.Errorf("create: %w", err)
-			}
-		}
-		return nil, createProjectOutput{
-			Namespace: in.Namespace,
-			Project:   in.ProjectName,
-			Message:   "project created",
-		}, nil
-	})
+	// create_project: disabled — no create_namespace counterpart, design pending.
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_projects",
@@ -528,7 +500,6 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, oauthStor
 	registerRepoTools(mcpServer, gitStore)
 	registerSeedTools(mcpServer, gitStore, sc.vault, gityardURL)
 	registerTokenTools(mcpServer, gitStore, oauthStore, cfg.Server.HTTP.ExternalURL, cfg.Server.HTTP.Listen)
-	registerAgentTools(mcpServer, gitStore, cfg.AgentSpawn, cfg.Storage.BaseDir, gityardURL, integrityHS, logger)
 
 	return mcpServer
 }
