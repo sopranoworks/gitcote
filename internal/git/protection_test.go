@@ -273,21 +273,21 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 			return auth.Principal{
 				Name:  "coder",
 				Email: "coder@test.com",
-				Scope: "git/namespace:ns/proj:r",
+				Scope: "git/ns:proj:r",
 			}, "", true
 		}
 		if token == "w-token" {
 			return auth.Principal{
 				Name:  "dev",
 				Email: "dev@test.com",
-				Scope: "git/namespace:ns/proj:rw",
+				Scope: "git/ns:proj:rw",
 			}, "", true
 		}
 		if token == "branch-token" {
 			return auth.Principal{
 				Name:  "agent",
 				Email: "agent@test.com",
-				Scope: "git/namespace:ns/proj:rw",
+				Scope: "git/ns:proj:rw",
 				ExtraPermissions: map[string]any{
 					"allowed_branches": []any{"task-42/"},
 				},
@@ -297,7 +297,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 			return auth.Principal{
 				Name:  "reviewer",
 				Email: "reviewer@test.com",
-				Scope: "namespace:ns/proj:rw",
+				Scope: "ns:proj:rw",
 			}, "", true
 		}
 		return auth.Principal{}, auth.ReasonInvalidToken, false
@@ -411,7 +411,7 @@ func TestBranchProtection_PRPushOptions(t *testing.T) {
 			return auth.Principal{
 				Name:  "coder",
 				Email: "coder@test.com",
-				Scope: "git/namespace:ns/proj:rw",
+				Scope: "git/ns:proj:rw",
 			}, "", true
 		}
 		if token == "admin-token" {
@@ -493,30 +493,30 @@ func TestBranchRestriction_DirectiveVerification(t *testing.T) {
 		case "rw-feat-token":
 			return auth.Principal{
 				Name: "agent", Email: "agent@test.com",
-				Scope:            "git/namespace:test/prtest:rw",
+				Scope:            "git/test:prtest:rw",
 				ExtraPermissions: map[string]any{"allowed_branches": []any{"feat/"}},
 			}, "", true
 		case "rw-task1-token":
 			return auth.Principal{
 				Name: "agent", Email: "agent@test.com",
-				Scope:            "git/namespace:test/prtest:rw",
+				Scope:            "git/test:prtest:rw",
 				ExtraPermissions: map[string]any{"allowed_branches": []any{"task-1/"}},
 			}, "", true
 		case "rw-noprefix-token":
 			return auth.Principal{
 				Name: "agent", Email: "agent@test.com",
-				Scope: "git/namespace:test/prtest:rw",
+				Scope: "git/test:prtest:rw",
 			}, "", true
 		case "r-feat-token":
 			return auth.Principal{
 				Name: "agent", Email: "agent@test.com",
-				Scope:            "git/namespace:test/prtest:r",
+				Scope:            "git/test:prtest:r",
 				ExtraPermissions: map[string]any{"allowed_branches": []any{"feat/"}},
 			}, "", true
 		case "mcp-only-token":
 			return auth.Principal{
 				Name: "reviewer", Email: "reviewer@test.com",
-				Scope: "namespace:test/prtest:rw",
+				Scope: "test:prtest:rw",
 			}, "", true
 		}
 		return auth.Principal{}, auth.ReasonInvalidToken, false

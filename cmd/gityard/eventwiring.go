@@ -94,13 +94,13 @@ func issueAgentToken(ec *eventContext, namespace, project string, prNumber int, 
 	var ep map[string]any
 	switch role {
 	case "reviewer":
-		scope = fmt.Sprintf("namespace:%s/%s:rw", namespace, project)
+		scope = fmt.Sprintf("%s:%s:rw", namespace, project)
 	case "coder", "merger":
-		scope = fmt.Sprintf("git/namespace:%s/%s:rw", namespace, project)
+		scope = fmt.Sprintf("git/%s:%s:rw", namespace, project)
 		prefix := sourceBranch + "/"
 		ep = map[string]any{"allowed_branches": []any{prefix}}
 	default:
-		scope = fmt.Sprintf("namespace:%s/%s:rw", namespace, project)
+		scope = fmt.Sprintf("%s:%s:rw", namespace, project)
 	}
 
 	ttl := ec.agentCfg.TimeoutDuration()

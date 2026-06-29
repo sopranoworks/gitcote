@@ -74,7 +74,7 @@ func registerTokenTools(mcpServer *mcp.Server, gitStore *git.Store, oauthStore *
 		if in.Scope == "w" || in.Scope == "rw" {
 			scopeLevel = "rw"
 		}
-		scope := fmt.Sprintf("git/namespace:%s/%s:%s", in.Namespace, in.ProjectName, scopeLevel)
+		scope := fmt.Sprintf("git/%s:%s:%s", in.Namespace, in.ProjectName, scopeLevel)
 
 		var ep map[string]any
 		if len(in.AllowedBranches) > 0 {

@@ -64,11 +64,11 @@ func TestScopeEnforcement(t *testing.T) {
 	prNum := prs[0].Number
 
 	tokens := map[string]string{
-		"read":      "namespace:test/prtest:r",
-		"readwrite": "namespace:test/prtest:rw",
-		"wrong_ns":  "namespace:other/prtest:r",
-		"wrong_proj": "namespace:test/other:r",
-		"git_only":  "git/namespace:test/prtest:rw",
+		"read":      "test:prtest:r",
+		"readwrite": "test:prtest:rw",
+		"wrong_ns":  "other:prtest:r",
+		"wrong_proj": "test:other:r",
+		"git_only":  "git/test:prtest:rw",
 	}
 
 	mcpServer := mcp.NewServer(
