@@ -132,7 +132,7 @@ func registerAgentTools(mcpServer *mcp.Server, _ *git.Store, agentCfg AgentSpawn
 				Name:        c.DirName,
 				Role:        c.Role,
 				DisplayName: c.DisplayName,
-				HasEnvDir:   c.EnvDir != "",
+				HasEnvDir:   c.HasEnvDir(),
 			})
 		}
 		return nil, listAgentsOutput{Agents: agents}, nil

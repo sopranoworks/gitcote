@@ -14,7 +14,15 @@ type AgentConfig struct {
 	DisplayName string
 	Command     string
 	Prompt      string
-	EnvDir      string // path to environment_default/ directory (empty if absent)
+	EnvDir      string // path to environment_default/ directory (empty for builtin configs)
+	IsBuiltin   bool
+}
+
+func (c *AgentConfig) HasEnvDir() bool {
+	if c.IsBuiltin {
+		return hasBuiltinEnvDefault(c.DirName)
+	}
+	return c.EnvDir != ""
 }
 
 type agentYAML struct {
@@ -48,12 +56,32 @@ func (configs AgentConfigs) FindByRole(role string) []*AgentConfig {
 }
 
 func ScanAgentConfigs(configRoot string) (AgentConfigs, error) {
+	var configs AgentConfigs
+
+	names, err := builtinNames()
+	if err != nil {
+		return nil, fmt.Errorf("list builtin agents: %w", err)
+	}
+	for _, name := range names {
+		cfg, err := loadBuiltinConfig(name)
+		if err != nil {
+			return nil, err
+		}
+		configs = append(configs, *cfg)
+	}
+
+	if configRoot == "" {
+		return configs, nil
+	}
+
 	entries, err := os.ReadDir(configRoot)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return configs, nil
+		}
 		return nil, fmt.Errorf("read agent config root %q: %w", configRoot, err)
 	}
 
-	var configs AgentConfigs
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -92,14 +120,27 @@ func ScanAgentConfigs(configRoot string) (AgentConfigs, error) {
 			envDir = ""
 		}
 
-		configs = append(configs, AgentConfig{
+		userCfg := AgentConfig{
 			DirName:     entry.Name(),
 			Role:        parsed.Agent.Role,
 			DisplayName: displayName,
 			Command:     parsed.Agent.Command,
 			Prompt:      parsed.Agent.Prompt,
 			EnvDir:      envDir,
-		})
+		}
+
+		overridden := false
+		for i, c := range configs {
+			if c.DirName == entry.Name() {
+				configs[i] = userCfg
+				overridden = true
+				break
+			}
+		}
+		if !overridden {
+			configs = append(configs, userCfg)
+		}
 	}
+
 	return configs, nil
 }

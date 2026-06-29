@@ -13,7 +13,7 @@ import (
 func TestScanAgentConfigs(t *testing.T) {
 	dir := t.TempDir()
 
-	// Create two agent configs
+	// Create two user agent configs
 	mkAgent(t, dir, "my_reviewer", "reviewer", "Reviewer", "echo review", "Review $PR_ID")
 	mkAgent(t, dir, "my_merger", "merger", "", "echo merge", "Merge $PR_ID")
 	// Create a directory without agent.yaml (should be skipped)
@@ -23,8 +23,12 @@ func TestScanAgentConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(configs) != 2 {
-		t.Fatalf("expected 2 configs, got %d", len(configs))
+
+	// Should include 6 built-in + 2 user configs
+	builtins, _ := builtinNames()
+	expectedCount := len(builtins) + 2
+	if len(configs) != expectedCount {
+		t.Fatalf("expected %d configs (6 builtin + 2 user), got %d", expectedCount, len(configs))
 	}
 
 	r := configs.FindByName("my_reviewer")
@@ -37,6 +41,9 @@ func TestScanAgentConfigs(t *testing.T) {
 	if r.DisplayName != "Reviewer" {
 		t.Errorf("display_name = %q, want Reviewer", r.DisplayName)
 	}
+	if r.IsBuiltin {
+		t.Error("user config should not be marked as builtin")
+	}
 
 	m := configs.FindByName("my_merger")
 	if m == nil {
@@ -47,8 +54,8 @@ func TestScanAgentConfigs(t *testing.T) {
 	}
 
 	reviewers := configs.FindByRole("reviewer")
-	if len(reviewers) != 1 {
-		t.Errorf("FindByRole(reviewer) = %d, want 1", len(reviewers))
+	if len(reviewers) < 1 {
+		t.Errorf("FindByRole(reviewer) = %d, want >= 1", len(reviewers))
 	}
 }
 
@@ -61,6 +68,91 @@ func TestScanAgentConfigs_MalformedYAML(t *testing.T) {
 	_, err := ScanAgentConfigs(dir)
 	if err == nil {
 		t.Fatal("expected error for missing command")
+	}
+}
+
+func TestScanAgentConfigs_BuiltinDefaults(t *testing.T) {
+	configs, err := ScanAgentConfigs("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(configs) != 6 {
+		t.Fatalf("expected 6 builtin configs, got %d", len(configs))
+	}
+
+	expectedNames := []string{
+		"default_claude_merger",
+		"default_claude_reviewer",
+		"default_codex_merger",
+		"default_codex_reviewer",
+		"default_gemini_merger",
+		"default_gemini_reviewer",
+	}
+	for _, name := range expectedNames {
+		c := configs.FindByName(name)
+		if c == nil {
+			t.Errorf("builtin %s not found", name)
+			continue
+		}
+		if !c.IsBuiltin {
+			t.Errorf("%s should be marked as builtin", name)
+		}
+	}
+
+	reviewers := configs.FindByRole("reviewer")
+	if len(reviewers) != 3 {
+		t.Errorf("found %d reviewers, want 3", len(reviewers))
+	}
+	mergers := configs.FindByRole("merger")
+	if len(mergers) != 3 {
+		t.Errorf("found %d mergers, want 3", len(mergers))
+	}
+}
+
+func TestScanAgentConfigs_UserOverridesBuiltin(t *testing.T) {
+	dir := t.TempDir()
+
+	mkAgent(t, dir, "default_claude_reviewer", "reviewer", "Custom Reviewer", "custom-cmd", "custom prompt")
+
+	configs, err := ScanAgentConfigs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := configs.FindByName("default_claude_reviewer")
+	if r == nil {
+		t.Fatal("default_claude_reviewer not found")
+	}
+	if r.Command != "custom-cmd" {
+		t.Errorf("expected user override command, got %q", r.Command)
+	}
+	if r.IsBuiltin {
+		t.Error("overridden config should not be marked as builtin")
+	}
+	if r.DisplayName != "Custom Reviewer" {
+		t.Errorf("display_name = %q, want Custom Reviewer", r.DisplayName)
+	}
+}
+
+func TestScanAgentConfigs_EmptyConfigRoot(t *testing.T) {
+	dir := t.TempDir()
+	configs, err := ScanAgentConfigs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) != 6 {
+		t.Fatalf("expected 6 builtin configs with empty configRoot dir, got %d", len(configs))
+	}
+}
+
+func TestScanAgentConfigs_NonexistentConfigRoot(t *testing.T) {
+	configs, err := ScanAgentConfigs("/nonexistent/path/that/does/not/exist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) != 6 {
+		t.Fatalf("expected 6 builtin configs with nonexistent configRoot, got %d", len(configs))
 	}
 }
 
@@ -117,21 +209,56 @@ func TestPrepareWorkDir(t *testing.T) {
 	}
 }
 
+func TestPrepareWorkDir_Builtin(t *testing.T) {
+	configs, err := ScanAgentConfigs("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reviewer := configs.FindByName("default_claude_reviewer")
+	if reviewer == nil {
+		t.Fatal("default_claude_reviewer not found")
+	}
+	if !reviewer.IsBuiltin {
+		t.Fatal("expected builtin config")
+	}
+
+	ctx := &SpawnContext{
+		PRId:      "ns/proj#1",
+		Namespace: "ns",
+		Project:   "proj",
+	}
+
+	workDir, cleanup, err := PrepareWorkDir(reviewer, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	claudeMD, err := os.ReadFile(filepath.Join(workDir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claudeMD) == 0 {
+		t.Error("CLAUDE.md should not be empty")
+	}
+}
+
 func TestVariableSubstitution_AllVars(t *testing.T) {
 	ctx := &SpawnContext{
-		PRId:         "ns/proj#1",
-		PRNumber:     1,
-		Namespace:    "ns",
-		Project:      "proj",
-		SourceBranch: "feature",
-		TargetBranch: "main",
-		Directive:    "d.md",
-		Report:       "r.md",
-		TempCloneDir: "/tmp/tc",
+		PRId:          "ns/proj#1",
+		PRNumber:      1,
+		Namespace:     "ns",
+		Project:       "proj",
+		SourceBranch:  "feature",
+		TargetBranch:  "main",
+		Directive:     "d.md",
+		Report:        "r.md",
+		TempCloneDir:  "/tmp/tc",
 		ConflictFiles: "a.go,b.go",
-		OrderFiles:   "/shoka/dev/directives/d.md",
-		ResultFiles:  "/shoka/dev/reports/r.md,/shoka/dev/reports/r2.md",
-		Token:        "tok123",
+		OrderFiles:    "/shoka/dev/directives/d.md",
+		ResultFiles:   "/shoka/dev/reports/r.md,/shoka/dev/reports/r2.md",
+		Token:         "tok123",
 	}
 
 	vars := buildVarMap(ctx, "/work")
@@ -275,77 +402,6 @@ func TestExecuteAgent_HardTimeout(t *testing.T) {
 	}
 }
 
-func TestEnsureDefaultAgents(t *testing.T) {
-	dir := t.TempDir()
-
-	if err := EnsureDefaultAgents(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	// Should have created 6 default agent directories
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 6 {
-		t.Fatalf("expected 6 default agents, got %d", len(entries))
-	}
-
-	expectedNames := []string{
-		"default_claude_merger",
-		"default_claude_reviewer",
-		"default_codex_merger",
-		"default_codex_reviewer",
-		"default_gemini_merger",
-		"default_gemini_reviewer",
-	}
-	for _, name := range expectedNames {
-		yamlPath := filepath.Join(dir, name, "agent.yaml")
-		if _, err := os.Stat(yamlPath); err != nil {
-			t.Errorf("%s: agent.yaml missing", name)
-		}
-	}
-
-	// Configs should be scannable
-	configs, err := ScanAgentConfigs(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(configs) != 6 {
-		t.Errorf("scan found %d configs, want 6", len(configs))
-	}
-	reviewers := configs.FindByRole("reviewer")
-	if len(reviewers) != 3 {
-		t.Errorf("found %d reviewers, want 3", len(reviewers))
-	}
-	mergers := configs.FindByRole("merger")
-	if len(mergers) != 3 {
-		t.Errorf("found %d mergers, want 3", len(mergers))
-	}
-}
-
-func TestEnsureDefaultAgents_NoOverwrite(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create a custom agent that would conflict
-	customDir := filepath.Join(dir, "default_claude_reviewer")
-	os.MkdirAll(customDir, 0o755)
-	os.WriteFile(filepath.Join(customDir, "agent.yaml"), []byte("agent:\n  role: reviewer\n  command: custom\n  prompt: custom\n"), 0o644)
-
-	if err := EnsureDefaultAgents(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	// Custom should NOT be overwritten
-	data, err := os.ReadFile(filepath.Join(customDir, "agent.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), "custom") {
-		t.Error("custom agent.yaml was overwritten")
-	}
-}
-
 func TestPrepareWorkDir_NoMCPJson(t *testing.T) {
 	envDir := t.TempDir()
 	os.WriteFile(filepath.Join(envDir, "CLAUDE.md"), []byte("review PR $PR_ID"), 0o644)
@@ -375,12 +431,7 @@ func TestPrepareWorkDir_NoMCPJson(t *testing.T) {
 }
 
 func TestPrepareWorkDir_CleanCLAUDEmd(t *testing.T) {
-	dir := t.TempDir()
-	if err := EnsureDefaultAgents(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	configs, err := ScanAgentConfigs(dir)
+	configs, err := ScanAgentConfigs("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,12 +476,7 @@ func TestPrepareWorkDir_CleanCLAUDEmd(t *testing.T) {
 }
 
 func TestResolvedPrompt_OrderResultFiles(t *testing.T) {
-	dir := t.TempDir()
-	if err := EnsureDefaultAgents(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	configs, err := ScanAgentConfigs(dir)
+	configs, err := ScanAgentConfigs("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,12 +518,7 @@ func TestResolvedPrompt_OrderResultFiles(t *testing.T) {
 }
 
 func TestResolvedCommand_BypassPermissions(t *testing.T) {
-	dir := t.TempDir()
-	if err := EnsureDefaultAgents(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	configs, err := ScanAgentConfigs(dir)
+	configs, err := ScanAgentConfigs("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,12 +548,7 @@ func TestResolvedCommand_BypassPermissions(t *testing.T) {
 }
 
 func TestDefaultAgentPrompts_NoMCPURLReferences(t *testing.T) {
-	dir := t.TempDir()
-	if err := EnsureDefaultAgents(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	configs, err := ScanAgentConfigs(dir)
+	configs, err := ScanAgentConfigs("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,20 +556,33 @@ func TestDefaultAgentPrompts_NoMCPURLReferences(t *testing.T) {
 	banned := []string{"$GITYARD_MCP_URL", "$GITYARD_GIT_URL", "$GITYARD_SSH_URL", "$SHOKA_MCP_URL", "Shoka"}
 
 	for _, c := range configs {
+		if !c.IsBuiltin {
+			continue
+		}
 		for _, b := range banned {
 			if strings.Contains(c.Prompt, b) {
 				t.Errorf("agent %s prompt contains banned reference %q", c.DirName, b)
 			}
 		}
 
-		if c.EnvDir != "" {
-			entries, err := os.ReadDir(c.EnvDir)
+		if c.HasEnvDir() {
+			ctx := &SpawnContext{Namespace: "test"}
+			workDir, cleanup, err := PrepareWorkDir(&c, ctx)
 			if err != nil {
-				t.Errorf("read envdir %s: %v", c.EnvDir, err)
+				t.Errorf("prepare workdir for %s: %v", c.DirName, err)
+				continue
+			}
+			entries, err := os.ReadDir(workDir)
+			if err != nil {
+				cleanup()
+				t.Errorf("read workdir %s: %v", c.DirName, err)
 				continue
 			}
 			for _, e := range entries {
-				data, err := os.ReadFile(filepath.Join(c.EnvDir, e.Name()))
+				if e.IsDir() {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(workDir, e.Name()))
 				if err != nil {
 					continue
 				}
@@ -544,7 +593,31 @@ func TestDefaultAgentPrompts_NoMCPURLReferences(t *testing.T) {
 					}
 				}
 			}
+			cleanup()
 		}
+	}
+}
+
+func TestBuiltinHasEnvDir(t *testing.T) {
+	configs, err := ScanAgentConfigs("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claudeReviewer := configs.FindByName("default_claude_reviewer")
+	if claudeReviewer == nil {
+		t.Fatal("default_claude_reviewer not found")
+	}
+	if !claudeReviewer.HasEnvDir() {
+		t.Error("default_claude_reviewer should have env dir")
+	}
+
+	codexReviewer := configs.FindByName("default_codex_reviewer")
+	if codexReviewer == nil {
+		t.Fatal("default_codex_reviewer not found")
+	}
+	if codexReviewer.HasEnvDir() {
+		t.Error("default_codex_reviewer should not have env dir")
 	}
 }
 

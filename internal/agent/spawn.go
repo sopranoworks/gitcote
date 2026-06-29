@@ -50,7 +50,14 @@ func PrepareWorkDir(config *AgentConfig, ctx *SpawnContext) (workDir string, cle
 
 	vars := buildVarMap(ctx, workDir)
 
-	if config.EnvDir != "" {
+	if config.IsBuiltin {
+		if hasBuiltinEnvDefault(config.DirName) {
+			if err := copyBuiltinEnvDefault(config.DirName, workDir, vars); err != nil {
+				cleanup()
+				return "", nil, fmt.Errorf("copy builtin environment_default: %w", err)
+			}
+		}
+	} else if config.EnvDir != "" {
 		if err := copyDirWithSubstitution(config.EnvDir, workDir, vars); err != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("copy environment_default: %w", err)

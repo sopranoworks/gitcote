@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sopranoworks/gityard/internal/agent"
 	"github.com/sopranoworks/gityard/internal/git"
 	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/gityard/internal/sshd"
@@ -295,13 +294,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 
 	wsMgr := newWSManager(core, webAuth.OriginAllowed, seedCtx, gitStore, sshKeyStore, cfg.Server.SSH.Listen, srvInfoCtx, integrityHS, evtCtx, logger)
 
-	// ---- Agent spawn: ensure default configs exist ----
-	if cfg.AgentSpawn.IsEnabled() {
-		agentConfigRoot := cfg.AgentSpawn.EffectiveConfigRoot(cfg.Storage.BaseDir)
-		if err := agent.EnsureDefaultAgents(agentConfigRoot); err != nil {
-			logger.Warn("failed to ensure default agent configs", "error", err)
-		}
-	}
+	// Built-in agent configs are served from go:embed; no disk copy needed.
 
 	// ---- MCP server (Git management tools + server info) ----
 	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, oauthStore, gityardURL, integrityHS, evtCtx, logger)

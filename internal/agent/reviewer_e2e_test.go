@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -275,7 +276,22 @@ func TestReviewerLoopE2E(t *testing.T) {
 
 	t.Logf("mock MCP server at %s", mock.URL())
 
-	// 2. Build SpawnContext
+	// 2. Load configs via production code path (built-in from embed)
+	configs, err := ScanAgentConfigs("")
+	if err != nil {
+		t.Fatalf("scan agent configs: %v", err)
+	}
+
+	reviewerConfig := configs.FindByName("default_claude_reviewer")
+	if reviewerConfig == nil {
+		t.Fatal("default_claude_reviewer not found in builtin configs")
+	}
+
+	if !strings.Contains(reviewerConfig.Command, "bypassPermissions") {
+		t.Fatalf("builtin reviewer command missing bypassPermissions: %s", reviewerConfig.Command)
+	}
+
+	// 3. Build SpawnContext
 	ctx := &SpawnContext{
 		PRId:         "test/prtest#1",
 		PRNumber:     1,
@@ -287,41 +303,40 @@ func TestReviewerLoopE2E(t *testing.T) {
 		ResultFiles:  "/test/prtest/reports/2026-06-28-hello-complete.md",
 	}
 
-	// 3. Create workdir with git init and MCP config
-	workDir := t.TempDir()
+	// 4. PrepareWorkDir via production code path (builtin env from embed)
+	workDir, cleanup, err := PrepareWorkDir(reviewerConfig, ctx)
+	if err != nil {
+		t.Fatalf("prepare workdir: %v", err)
+	}
+	defer cleanup()
 
+	// 5. Write mock MCP config into the workdir
+	if err := writeMockMCPConfig(workDir, mock.URL()); err != nil {
+		t.Fatalf("write mock mcp config: %v", err)
+	}
+
+	// git init so Claude detects a project root
 	gitInit := exec.Command("git", "init")
 	gitInit.Dir = workDir
 	if out, err := gitInit.CombinedOutput(); err != nil {
 		t.Fatalf("git init in workdir: %v\n%s", err, out)
 	}
 
-	if err := writeMockMCPConfig(workDir, mock.URL()); err != nil {
-		t.Fatalf("write mock mcp config: %v", err)
-	}
-
-	// 4. Build reviewer config with --strict-mcp-config to isolate from user-level MCP
+	// 6. Inject --strict-mcp-config for test isolation (test-only concern:
+	// prevents user-level MCP config from interfering with the mock)
 	mcpConfigPath := filepath.Join(workDir, ".claude", "mcp.json")
-	reviewerConfig := &AgentConfig{
-		DirName: "test_claude_reviewer",
-		Role:    "reviewer",
-		Command: fmt.Sprintf(
-			`claude --permission-mode bypassPermissions --strict-mcp-config --mcp-config %s -p "$PROMPT"`,
-			mcpConfigPath,
-		),
-		Prompt: `Review PR $PR_ID ($SOURCE_BRANCH → $TARGET_BRANCH).
-
-Use available MCP tools to read the PR diff and files.
-If order files are provided ($ORDER_FILES), read them for context.
-If result files are provided ($RESULT_FILES), read them for context.
-
-Call approve_pull_request or reject_pull_request when done.`,
-	}
+	reviewerConfig.Command = strings.Replace(
+		reviewerConfig.Command,
+		"-p",
+		fmt.Sprintf("--strict-mcp-config --mcp-config %s -p", mcpConfigPath),
+		1,
+	)
 
 	t.Logf("workdir: %s", workDir)
 	t.Logf("mcp config: %s", mcpConfigPath)
+	t.Logf("command: %s", reviewerConfig.Command)
 
-	// 5. Execute agent (real claude, timeout 2 min)
+	// 7. Execute agent (real claude, timeout 2 min)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	result, err := ExecuteAgent(reviewerConfig, ctx, workDir, 2*time.Minute, logger)
 	if err != nil {
@@ -331,7 +346,7 @@ Call approve_pull_request or reject_pull_request when done.`,
 	t.Logf("agent exited: code=%d killed=%v duration=%v",
 		result.ExitCode, result.Killed, result.FinishedAt.Sub(result.StartedAt))
 
-	// 7. Check exit
+	// 8. Check exit
 	if result.Killed {
 		t.Fatalf("agent was killed (%s)\nlog:\n%s", result.KillReason, readLog(result.LogFile))
 	}
@@ -339,13 +354,13 @@ Call approve_pull_request or reject_pull_request when done.`,
 		t.Fatalf("agent exit %d\nlog:\n%s", result.ExitCode, readLog(result.LogFile))
 	}
 
-	// 8. Check mock received approve or reject
+	// 9. Check mock received approve or reject
 	if !mock.HasCall("approve_pull_request") && !mock.HasCall("reject_pull_request") {
 		t.Fatalf("agent did not call approve or reject\ncalls: %v\nlog:\n%s",
 			mock.GetCalls(), readLog(result.LogFile))
 	}
 
-	// 9. Validate parameters of the call
+	// 10. Validate parameters of the call
 	for _, call := range mock.GetCalls() {
 		if call.Tool != "approve_pull_request" && call.Tool != "reject_pull_request" {
 			continue
