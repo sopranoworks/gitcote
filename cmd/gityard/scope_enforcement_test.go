@@ -68,6 +68,7 @@ func TestScopeEnforcement(t *testing.T) {
 		"readwrite": "namespace:test/prtest:rw",
 		"wrong_ns":  "namespace:other/prtest:r",
 		"wrong_proj": "namespace:test/other:r",
+		"git_only":  "git/namespace:test/prtest:rw",
 	}
 
 	mcpServer := mcp.NewServer(
@@ -205,6 +206,22 @@ func TestScopeEnforcement(t *testing.T) {
 				t.Fatalf("expected 'access denied', got %q", msg)
 			}
 		})
+	})
+
+	t.Run("git_zone_denied_mcp", func(t *testing.T) {
+		session := connectMCP(t, "git_only")
+
+		for _, tool := range []string{"get_pull_request", "get_pull_request_diff", "approve_pull_request"} {
+			t.Run(tool+"_denied", func(t *testing.T) {
+				ok, msg := callTool(t, session, tool, readArgs)
+				if ok {
+					t.Fatalf("%s should fail with git/-only token, but succeeded", tool)
+				}
+				if !strings.Contains(msg, "access denied") {
+					t.Fatalf("%s: expected 'access denied', got %q", tool, msg)
+				}
+			})
+		}
 	})
 }
 

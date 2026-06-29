@@ -259,7 +259,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 
 	handler := git.NewHandler(store, logger)
 	handler.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
-		effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
+		effectiveLevel := git.EffectiveGitLevel(principal.Scope, namespace, project)
 		allowed := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
 		repo, err := store.OpenRepo(namespace, project)
 		if err != nil {
@@ -273,24 +273,31 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 			return auth.Principal{
 				Name:  "coder",
 				Email: "coder@test.com",
-				Scope: "namespace:ns/proj:r",
+				Scope: "git/namespace:ns/proj:r",
 			}, "", true
 		}
 		if token == "w-token" {
 			return auth.Principal{
 				Name:  "dev",
 				Email: "dev@test.com",
-				Scope: "namespace:ns/proj:rw",
+				Scope: "git/namespace:ns/proj:rw",
 			}, "", true
 		}
 		if token == "branch-token" {
 			return auth.Principal{
 				Name:  "agent",
 				Email: "agent@test.com",
-				Scope: "namespace:ns/proj:rw",
+				Scope: "git/namespace:ns/proj:rw",
 				ExtraPermissions: map[string]any{
 					"allowed_branches": []any{"task-42/"},
 				},
+			}, "", true
+		}
+		if token == "mcp-only-token" {
+			return auth.Principal{
+				Name:  "reviewer",
+				Email: "reviewer@test.com",
+				Scope: "namespace:ns/proj:rw",
 			}, "", true
 		}
 		return auth.Principal{}, auth.ReasonInvalidToken, false
@@ -305,7 +312,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// W-level: push to main → succeeds.
+	// RW git-zone: push to main → succeeds.
 	cloneDir := t.TempDir()
 	cloneURL := fmt.Sprintf("http://x-token:w-token@%s/ns/proj.git", ts.Listener.Addr().String())
 	runGit(t, cloneDir, "clone", cloneURL, "w-repo")
@@ -315,7 +322,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 	runGit(t, wRepoDir, "commit", "-m", "init")
 	runGit(t, wRepoDir, "push", "-u", "origin", "HEAD:refs/heads/main")
 
-	// R-level: push to feature branch → rejected (r-scoped tokens cannot push).
+	// R git-zone: push to feature branch → rejected (r-scoped tokens cannot push).
 	rDir := t.TempDir()
 	rCloneURL := fmt.Sprintf("http://x-token:r-token@%s/ns/proj.git", ts.Listener.Addr().String())
 	runGit(t, rDir, "clone", rCloneURL, "r-repo")
@@ -329,13 +336,21 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 		t.Fatal("R-level push to feature branch should be rejected")
 	}
 
-	// R-level: push to main → rejected.
+	// R git-zone: push to main → rejected.
 	err = runGitResult(rRepoDir, "push", "origin", "HEAD:refs/heads/main")
 	if err == nil {
 		t.Fatal("R-level push to main should be rejected")
 	}
 
-	// W-level: force push to main → rejected (403).
+	// MCP-only token: clone → rejected (no git/ zone).
+	mcpDir := t.TempDir()
+	mcpCloneURL := fmt.Sprintf("http://x-token:mcp-only-token@%s/ns/proj.git", ts.Listener.Addr().String())
+	err = runGitResult(mcpDir, "clone", mcpCloneURL, "mcp-repo")
+	if err == nil {
+		t.Fatal("MCP-only (unzoned) token should be denied git clone")
+	}
+
+	// RW git-zone: force push to main → rejected (403).
 	os.WriteFile(filepath.Join(wRepoDir, "amend.txt"), []byte("amend"), 0o644)
 	runGit(t, wRepoDir, "add", "amend.txt")
 	runGit(t, wRepoDir, "commit", "--amend", "-m", "amended")
@@ -344,13 +359,13 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 		t.Fatal("force push to main should be rejected")
 	}
 
-	// W-level: delete main → rejected (403).
+	// RW git-zone: delete main → rejected (403).
 	err = runGitResult(wRepoDir, "push", "origin", "--delete", "main")
 	if err == nil {
 		t.Fatal("delete main should be rejected")
 	}
 
-	// Branch-restricted token (rw): push to task-42/impl → succeeds.
+	// Branch-restricted git-zone token (rw): push to task-42/impl → succeeds.
 	bDir := t.TempDir()
 	bCloneURL := fmt.Sprintf("http://x-token:branch-token@%s/ns/proj.git", ts.Listener.Addr().String())
 	runGit(t, bDir, "clone", bCloneURL, "b-repo")
@@ -361,7 +376,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 	runGit(t, bRepoDir, "commit", "-m", "task commit")
 	runGit(t, bRepoDir, "push", "-u", "origin", "HEAD:refs/heads/task-42/impl")
 
-	// Branch-restricted token (rw): push to other-branch → rejected (403).
+	// Branch-restricted git-zone token (rw): push to other-branch → rejected (403).
 	runGit(t, bRepoDir, "checkout", "-b", "other-branch")
 	os.WriteFile(filepath.Join(bRepoDir, "other.txt"), []byte("other"), 0o644)
 	runGit(t, bRepoDir, "add", "other.txt")
@@ -380,7 +395,7 @@ func TestBranchProtection_PRPushOptions(t *testing.T) {
 	var capturedPushOpts []string
 	handler := git.NewHandler(store, logger)
 	handler.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
-		effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
+		effectiveLevel := git.EffectiveGitLevel(principal.Scope, namespace, project)
 		repo, err := store.OpenRepo(namespace, project)
 		if err != nil {
 			return err
@@ -396,7 +411,7 @@ func TestBranchProtection_PRPushOptions(t *testing.T) {
 			return auth.Principal{
 				Name:  "coder",
 				Email: "coder@test.com",
-				Scope: "namespace:ns/proj:rw",
+				Scope: "git/namespace:ns/proj:rw",
 			}, "", true
 		}
 		if token == "admin-token" {
@@ -459,7 +474,7 @@ func TestBranchRestriction_DirectiveVerification(t *testing.T) {
 
 	handler := git.NewHandler(store, logger)
 	handler.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
-		effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
+		effectiveLevel := git.EffectiveGitLevel(principal.Scope, namespace, project)
 		allowed := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
 		repo, err := store.OpenRepo(namespace, project)
 		if err != nil {
@@ -478,25 +493,30 @@ func TestBranchRestriction_DirectiveVerification(t *testing.T) {
 		case "rw-feat-token":
 			return auth.Principal{
 				Name: "agent", Email: "agent@test.com",
-				Scope:            "namespace:test/prtest:rw",
+				Scope:            "git/namespace:test/prtest:rw",
 				ExtraPermissions: map[string]any{"allowed_branches": []any{"feat/"}},
 			}, "", true
 		case "rw-task1-token":
 			return auth.Principal{
 				Name: "agent", Email: "agent@test.com",
-				Scope:            "namespace:test/prtest:rw",
+				Scope:            "git/namespace:test/prtest:rw",
 				ExtraPermissions: map[string]any{"allowed_branches": []any{"task-1/"}},
 			}, "", true
 		case "rw-noprefix-token":
 			return auth.Principal{
 				Name: "agent", Email: "agent@test.com",
-				Scope: "namespace:test/prtest:rw",
+				Scope: "git/namespace:test/prtest:rw",
 			}, "", true
 		case "r-feat-token":
 			return auth.Principal{
 				Name: "agent", Email: "agent@test.com",
-				Scope:            "namespace:test/prtest:r",
+				Scope:            "git/namespace:test/prtest:r",
 				ExtraPermissions: map[string]any{"allowed_branches": []any{"feat/"}},
+			}, "", true
+		case "mcp-only-token":
+			return auth.Principal{
+				Name: "reviewer", Email: "reviewer@test.com",
+				Scope: "namespace:test/prtest:rw",
 			}, "", true
 		}
 		return auth.Principal{}, auth.ReasonInvalidToken, false
@@ -608,6 +628,22 @@ func TestBranchRestriction_DirectiveVerification(t *testing.T) {
 		if err == nil {
 			t.Fatal("rw-scoped token should be denied push to branch outside allowed_branches")
 		}
+	})
+
+	// === Zone isolation: MCP-only token denied git ===
+	t.Run("zone_mcp_only_denied_git", func(t *testing.T) {
+		dir := t.TempDir()
+		mcpURL := fmt.Sprintf("http://x-token:mcp-only-token@%s/test/prtest.git", addr)
+		err := runGitResult(dir, "clone", mcpURL, "mcp-repo")
+		if err == nil {
+			t.Fatal("unzoned (MCP-only) token should be denied git clone")
+		}
+	})
+
+	// === Zone isolation: super-user (*) allowed git ===
+	t.Run("zone_superuser_allowed_git", func(t *testing.T) {
+		dir := preparePush(t, "admin-token", "admin-push", "admin.txt")
+		runGit(t, dir, "push", "-u", "origin", "HEAD:refs/heads/admin-push")
 	})
 }
 

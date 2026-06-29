@@ -169,7 +169,7 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, namespace, p
 		}
 	}
 
-	if err := authz.Authorize(scope, namespace, project, level); err != nil {
+	if err := AuthorizeGitZone(scope, namespace, project, level); err != nil {
 		if !hasPrincipal {
 			w.Header().Set("WWW-Authenticate", `Basic realm="GitYard"`)
 			http.Error(w, "authentication required", http.StatusUnauthorized)

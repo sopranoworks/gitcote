@@ -236,7 +236,7 @@ func (s *Server) handleReceivePack(ctx context.Context, ch gossh.Channel, st *fi
 			fmt.Fprintf(ch.Stderr(), "error: %v\n", err)
 			return 1
 		}
-		effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
+		effectiveLevel := git.EffectiveGitLevel(principal.Scope, namespace, project)
 		allowedBranches := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
 		protSt = &protectedStorer{
 			Storer:  st,

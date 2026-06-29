@@ -15,7 +15,7 @@ import (
 const gityardIssuedClientID = "gityard-issued"
 
 func checkBranchProtection(gitStore *git.Store, namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
-	effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
+	effectiveLevel := git.EffectiveGitLevel(principal.Scope, namespace, project)
 	allowedBranches := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
 
 	repo, err := gitStore.OpenRepo(namespace, project)
@@ -74,7 +74,7 @@ func registerTokenTools(mcpServer *mcp.Server, gitStore *git.Store, oauthStore *
 		if in.Scope == "w" || in.Scope == "rw" {
 			scopeLevel = "rw"
 		}
-		scope := fmt.Sprintf("namespace:%s/%s:%s", in.Namespace, in.ProjectName, scopeLevel)
+		scope := fmt.Sprintf("git/namespace:%s/%s:%s", in.Namespace, in.ProjectName, scopeLevel)
 
 		var ep map[string]any
 		if len(in.AllowedBranches) > 0 {
