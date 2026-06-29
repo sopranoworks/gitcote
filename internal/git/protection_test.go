@@ -268,7 +268,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 		return git.CheckBranchProtection(repo, refUpdates, effectiveLevel, allowed)
 	}
 
-	rLevelValidate := func(token string) (auth.Principal, auth.RejectReason, bool) {
+	validate := func(token string) (auth.Principal, auth.RejectReason, bool) {
 		if token == "r-token" {
 			return auth.Principal{
 				Name:  "coder",
@@ -287,7 +287,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 			return auth.Principal{
 				Name:  "agent",
 				Email: "agent@test.com",
-				Scope: "namespace:ns/proj:r",
+				Scope: "namespace:ns/proj:rw",
 				ExtraPermissions: map[string]any{
 					"allowed_branches": []any{"task-42/"},
 				},
@@ -297,7 +297,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/", git.BasicAuthMiddleware(rLevelValidate)(handler))
+	mux.Handle("/", git.BasicAuthMiddleware(validate)(handler))
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
@@ -315,7 +315,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 	runGit(t, wRepoDir, "commit", "-m", "init")
 	runGit(t, wRepoDir, "push", "-u", "origin", "HEAD:refs/heads/main")
 
-	// R-level: push to feature branch → succeeds.
+	// R-level: push to feature branch → rejected (r-scoped tokens cannot push).
 	rDir := t.TempDir()
 	rCloneURL := fmt.Sprintf("http://x-token:r-token@%s/ns/proj.git", ts.Listener.Addr().String())
 	runGit(t, rDir, "clone", rCloneURL, "r-repo")
@@ -324,10 +324,13 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 	os.WriteFile(filepath.Join(rRepoDir, "feature.txt"), []byte("feature"), 0o644)
 	runGit(t, rRepoDir, "add", "feature.txt")
 	runGit(t, rRepoDir, "commit", "-m", "feature commit")
-	runGit(t, rRepoDir, "push", "-u", "origin", "HEAD:refs/heads/feature-branch")
+	err := runGitResult(rRepoDir, "push", "-u", "origin", "HEAD:refs/heads/feature-branch")
+	if err == nil {
+		t.Fatal("R-level push to feature branch should be rejected")
+	}
 
-	// R-level: push to main → rejected (403).
-	err := runGitResult(rRepoDir, "push", "origin", "HEAD:refs/heads/main")
+	// R-level: push to main → rejected.
+	err = runGitResult(rRepoDir, "push", "origin", "HEAD:refs/heads/main")
 	if err == nil {
 		t.Fatal("R-level push to main should be rejected")
 	}
@@ -347,7 +350,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 		t.Fatal("delete main should be rejected")
 	}
 
-	// Branch-restricted token: push to task-42/impl → succeeds.
+	// Branch-restricted token (rw): push to task-42/impl → succeeds.
 	bDir := t.TempDir()
 	bCloneURL := fmt.Sprintf("http://x-token:branch-token@%s/ns/proj.git", ts.Listener.Addr().String())
 	runGit(t, bDir, "clone", bCloneURL, "b-repo")
@@ -358,7 +361,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 	runGit(t, bRepoDir, "commit", "-m", "task commit")
 	runGit(t, bRepoDir, "push", "-u", "origin", "HEAD:refs/heads/task-42/impl")
 
-	// Branch-restricted token: push to other-branch → rejected (403).
+	// Branch-restricted token (rw): push to other-branch → rejected (403).
 	runGit(t, bRepoDir, "checkout", "-b", "other-branch")
 	os.WriteFile(filepath.Join(bRepoDir, "other.txt"), []byte("other"), 0o644)
 	runGit(t, bRepoDir, "add", "other.txt")
@@ -369,7 +372,7 @@ func TestBranchProtection_E2E_RLevel(t *testing.T) {
 	}
 }
 
-func TestBranchProtection_PRFromRLevel(t *testing.T) {
+func TestBranchProtection_PRPushOptions(t *testing.T) {
 	baseDir := t.TempDir()
 	store := git.NewStore(baseDir)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -388,15 +391,15 @@ func TestBranchProtection_PRFromRLevel(t *testing.T) {
 		capturedPushOpts = pushOpts
 	}
 
-	rLevelValidate := func(token string) (auth.Principal, auth.RejectReason, bool) {
-		if token == "r-token" {
+	validate := func(token string) (auth.Principal, auth.RejectReason, bool) {
+		if token == "rw-token" {
 			return auth.Principal{
 				Name:  "coder",
 				Email: "coder@test.com",
-				Scope: "namespace:ns/proj:r",
+				Scope: "namespace:ns/proj:rw",
 			}, "", true
 		}
-		if token == "w-token" {
+		if token == "admin-token" {
 			return auth.Principal{
 				Name:  "dev",
 				Email: "dev@test.com",
@@ -407,7 +410,7 @@ func TestBranchProtection_PRFromRLevel(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/", git.BasicAuthMiddleware(rLevelValidate)(handler))
+	mux.Handle("/", git.BasicAuthMiddleware(validate)(handler))
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
@@ -416,7 +419,7 @@ func TestBranchProtection_PRFromRLevel(t *testing.T) {
 	}
 
 	wDir := t.TempDir()
-	wURL := fmt.Sprintf("http://x-token:w-token@%s/ns/proj.git", ts.Listener.Addr().String())
+	wURL := fmt.Sprintf("http://x-token:admin-token@%s/ns/proj.git", ts.Listener.Addr().String())
 	runGit(t, wDir, "clone", wURL, "w-repo")
 	wRepoDir := filepath.Join(wDir, "w-repo")
 	os.WriteFile(filepath.Join(wRepoDir, "init.txt"), []byte("init"), 0o644)
@@ -424,15 +427,15 @@ func TestBranchProtection_PRFromRLevel(t *testing.T) {
 	runGit(t, wRepoDir, "commit", "-m", "init")
 	runGit(t, wRepoDir, "push", "-u", "origin", "HEAD:refs/heads/main")
 
-	rDir := t.TempDir()
-	rURL := fmt.Sprintf("http://x-token:r-token@%s/ns/proj.git", ts.Listener.Addr().String())
-	runGit(t, rDir, "clone", rURL, "r-repo")
-	rRepoDir := filepath.Join(rDir, "r-repo")
-	runGit(t, rRepoDir, "checkout", "-b", "feature-pr")
-	os.WriteFile(filepath.Join(rRepoDir, "pr.txt"), []byte("pr content"), 0o644)
-	runGit(t, rRepoDir, "add", "pr.txt")
-	runGit(t, rRepoDir, "commit", "-m", "pr commit")
-	runGit(t, rRepoDir, "push", "-u", "origin", "HEAD:refs/heads/feature-pr",
+	rwDir := t.TempDir()
+	rwURL := fmt.Sprintf("http://x-token:rw-token@%s/ns/proj.git", ts.Listener.Addr().String())
+	runGit(t, rwDir, "clone", rwURL, "rw-repo")
+	rwRepoDir := filepath.Join(rwDir, "rw-repo")
+	runGit(t, rwRepoDir, "checkout", "-b", "feature-pr")
+	os.WriteFile(filepath.Join(rwRepoDir, "pr.txt"), []byte("pr content"), 0o644)
+	runGit(t, rwRepoDir, "add", "pr.txt")
+	runGit(t, rwRepoDir, "commit", "-m", "pr commit")
+	runGit(t, rwRepoDir, "push", "-u", "origin", "HEAD:refs/heads/feature-pr",
 		"-o", "pull_request.create", "-o", "pull_request.target=main")
 
 	if len(capturedPushOpts) == 0 {
@@ -447,6 +450,165 @@ func TestBranchProtection_PRFromRLevel(t *testing.T) {
 	if !found {
 		t.Errorf("expected pull_request.create in push options, got: %v", capturedPushOpts)
 	}
+}
+
+func TestBranchRestriction_DirectiveVerification(t *testing.T) {
+	baseDir := t.TempDir()
+	store := git.NewStore(baseDir)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	handler := git.NewHandler(store, logger)
+	handler.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
+		effectiveLevel := authz.EffectiveLevel(authz.ParseScope(principal.Scope), namespace, project)
+		allowed := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
+		repo, err := store.OpenRepo(namespace, project)
+		if err != nil {
+			return err
+		}
+		return git.CheckBranchProtection(repo, refUpdates, effectiveLevel, allowed)
+	}
+
+	validate := func(token string) (auth.Principal, auth.RejectReason, bool) {
+		switch token {
+		case "admin-token":
+			return auth.Principal{
+				Name: "admin", Email: "admin@test.com",
+				Scope: "*",
+			}, "", true
+		case "rw-feat-token":
+			return auth.Principal{
+				Name: "agent", Email: "agent@test.com",
+				Scope:            "namespace:test/prtest:rw",
+				ExtraPermissions: map[string]any{"allowed_branches": []any{"feat/"}},
+			}, "", true
+		case "rw-task1-token":
+			return auth.Principal{
+				Name: "agent", Email: "agent@test.com",
+				Scope:            "namespace:test/prtest:rw",
+				ExtraPermissions: map[string]any{"allowed_branches": []any{"task-1/"}},
+			}, "", true
+		case "rw-noprefix-token":
+			return auth.Principal{
+				Name: "agent", Email: "agent@test.com",
+				Scope: "namespace:test/prtest:rw",
+			}, "", true
+		case "r-feat-token":
+			return auth.Principal{
+				Name: "agent", Email: "agent@test.com",
+				Scope:            "namespace:test/prtest:r",
+				ExtraPermissions: map[string]any{"allowed_branches": []any{"feat/"}},
+			}, "", true
+		}
+		return auth.Principal{}, auth.ReasonInvalidToken, false
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/", git.BasicAuthMiddleware(validate)(handler))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	if err := store.CreateRepo("test", "prtest"); err != nil {
+		t.Fatal(err)
+	}
+
+	addr := ts.Listener.Addr().String()
+	cloneURL := func(token string) string {
+		return fmt.Sprintf("http://x-token:%s@%s/test/prtest.git", token, addr)
+	}
+
+	// Set up main branch with admin token.
+	setupDir := t.TempDir()
+	runGit(t, setupDir, "clone", cloneURL("admin-token"), "setup")
+	setupRepo := filepath.Join(setupDir, "setup")
+	os.WriteFile(filepath.Join(setupRepo, "init.txt"), []byte("init"), 0o644)
+	runGit(t, setupRepo, "add", "init.txt")
+	runGit(t, setupRepo, "commit", "-m", "init")
+	runGit(t, setupRepo, "push", "-u", "origin", "HEAD:refs/heads/main")
+
+	preparePush := func(t *testing.T, token, branch, filename string) string {
+		t.Helper()
+		dir := t.TempDir()
+		runGit(t, dir, "clone", cloneURL(token), "repo")
+		repoDir := filepath.Join(dir, "repo")
+		runGit(t, repoDir, "checkout", "-b", branch)
+		os.WriteFile(filepath.Join(repoDir, filename), []byte(filename), 0o644)
+		runGit(t, repoDir, "add", filename)
+		runGit(t, repoDir, "commit", "-m", "commit "+filename)
+		return repoDir
+	}
+
+	// === Case 1: rw token with allowed_branches: ["feat/"] ===
+	t.Run("case1_feat_prefix", func(t *testing.T) {
+		// Push to feat/hello → allowed
+		dir := preparePush(t, "rw-feat-token", "feat/hello", "feat.txt")
+		runGit(t, dir, "push", "-u", "origin", "HEAD:refs/heads/feat/hello")
+
+		// Push to main → denied (default branch protection)
+		dir2 := preparePush(t, "rw-feat-token", "try-main", "main.txt")
+		err := runGitResult(dir2, "push", "origin", "HEAD:refs/heads/main")
+		if err == nil {
+			t.Fatal("push to main should be denied for branch-restricted token")
+		}
+
+		// Push to bugfix/x → denied (not in allowed_branches)
+		dir3 := preparePush(t, "rw-feat-token", "bugfix/x", "bugfix.txt")
+		err = runGitResult(dir3, "push", "origin", "HEAD:refs/heads/bugfix/x")
+		if err == nil {
+			t.Fatal("push to bugfix/x should be denied for feat/-restricted token")
+		}
+	})
+
+	// === Case 2: rw token with allowed_branches: ["task-1/"] ===
+	t.Run("case2_task1_prefix", func(t *testing.T) {
+		// Push to task-1/impl → allowed
+		dir := preparePush(t, "rw-task1-token", "task-1/impl", "task1.txt")
+		runGit(t, dir, "push", "-u", "origin", "HEAD:refs/heads/task-1/impl")
+
+		// Push to task-2/impl → denied
+		dir2 := preparePush(t, "rw-task1-token", "task-2/impl", "task2.txt")
+		err := runGitResult(dir2, "push", "origin", "HEAD:refs/heads/task-2/impl")
+		if err == nil {
+			t.Fatal("push to task-2/impl should be denied for task-1/-restricted token")
+		}
+	})
+
+	// === Case 3: rw token with no allowed_branches ===
+	t.Run("case3_no_restriction", func(t *testing.T) {
+		// Push to any non-default branch → allowed (no branch restriction)
+		dir := preparePush(t, "rw-noprefix-token", "anything/goes", "any.txt")
+		runGit(t, dir, "push", "-u", "origin", "HEAD:refs/heads/anything/goes")
+
+		// Push to main → still denied (default branch protection for non-admin)
+		dir2 := preparePush(t, "rw-noprefix-token", "try-main2", "main2.txt")
+		err := runGitResult(dir2, "push", "origin", "HEAD:refs/heads/main")
+		if err == nil {
+			t.Fatal("push to main should be denied even without branch restriction (rw cannot push to default)")
+		}
+	})
+
+	// === Case 4: r scope + allowed_branches → denied regardless ===
+	t.Run("case4_r_scope_with_branches", func(t *testing.T) {
+		// Even though allowed_branches includes "feat/", r-scoped tokens cannot push at all.
+		dir := preparePush(t, "r-feat-token", "feat/should-fail", "rfeat.txt")
+		err := runGitResult(dir, "push", "-u", "origin", "HEAD:refs/heads/feat/should-fail")
+		if err == nil {
+			t.Fatal("r-scoped token should not be able to push, even to allowed branch")
+		}
+	})
+
+	// === Case 5: rw scope + allowed_branches ===
+	t.Run("case5_rw_scope_with_branches", func(t *testing.T) {
+		// Push to allowed branch → allowed
+		dir := preparePush(t, "rw-feat-token", "feat/rw-ok", "rwfeat.txt")
+		runGit(t, dir, "push", "-u", "origin", "HEAD:refs/heads/feat/rw-ok")
+
+		// Push to disallowed branch → denied
+		dir2 := preparePush(t, "rw-feat-token", "other/rw-fail", "rwother.txt")
+		err := runGitResult(dir2, "push", "origin", "HEAD:refs/heads/other/rw-fail")
+		if err == nil {
+			t.Fatal("rw-scoped token should be denied push to branch outside allowed_branches")
+		}
+	})
 }
 
 // Helpers

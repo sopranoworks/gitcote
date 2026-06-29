@@ -147,8 +147,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requiredLevel(r *http.Request, parts []string) authz.Level {
-	// All git operations require at least LevelRead. R-level tokens can push
-	// to non-protected branches; the PreReceive hook enforces branch protection.
+	if len(parts) >= 3 {
+		rest := parts[2]
+		if rest == "git-receive-pack" {
+			return authz.LevelWrite
+		}
+		if rest == "info/refs" && r.URL.Query().Get("service") == "git-receive-pack" {
+			return authz.LevelWrite
+		}
+	}
 	return authz.LevelRead
 }
 
