@@ -1,0 +1,106 @@
+.control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+
+.checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--c-text, #e0e0e0);
+  cursor: pointer;
+  user-select: none;
+}
+
+.settingsBtn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--c-border, #444);
+  background: var(--c-bg-raised, #2a2a2a);
+  color: var(--c-text, #e0e0e0);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.settingsBtn:hover:not(:disabled) {
+  background: var(--c-bg-hover, #333);
+}
+
+.settingsBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay, 1000);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #00000066;
+  padding: var(--sp-4, 16px);
+  animation: shoka-fade-in var(--dur-fast, 150ms) ease;
+}
+
+.dialog {
+  width: 100%;
+  max-width: 560px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg-elev, #1e1e1e);
+  border: 1px solid var(--c-border-strong, #555);
+  border-radius: var(--radius-lg, 8px);
+  box-shadow: var(--shadow-overlay, 0 8px 32px #0006);
+  animation: shoka-pop-in-center var(--dur-fast, 150ms) var(--ease-out, ease-out);
+}
+
+.dialogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-4, 16px) var(--sp-5, 20px);
+  border-bottom: 1px solid var(--c-border, #333);
+  flex-shrink: 0;
+}
+
+.dialogTitle {
+  margin: 0;
+  font-size: var(--fs-lg, 1rem);
+  font-weight: 600;
+  color: var(--c-text, #e0e0e0);
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  color: var(--c-text-dim, #a4abb8);
+  font-size: 1.3rem;
+  cursor: pointer;
+  padding: 2px 8px;
+  line-height: 1;
+  border-radius: var(--radius-sm, 4px);
+}
+
+.closeBtn:hover {
+  color: var(--c-text, #e0e0e0);
+  background: var(--c-hover, #ffffff10);
+}
+
+.dialogBody {
+  padding: var(--sp-4, 16px) var(--sp-5, 20px);
+  overflow-y: auto;
+}
+
+.section {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--c-text, #e0e0e0);
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--c-border, #333);
+}

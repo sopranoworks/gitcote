@@ -24,7 +24,8 @@ import { SeedConfigSection } from './components/SeedConfigSection'
 import { SshKeysPage } from './components/SshKeysPage'
 import { UserSshKeysSection } from './components/UserSshKeysSection'
 import { ResumeBanner } from './components/ResumeBanner'
-import { PREventsSettingsGlobal, PREventsSettingsProject } from './components/PREventsSettings'
+import { PREventsSettingsGlobal } from './components/PREventsSettings'
+import { AgentSettingsProjectControl } from './components/AgentSettingsProjectControl'
 import { PRViewPane } from './components/PRViewPane'
 
 function SettingsResumeBanner() {
@@ -55,11 +56,11 @@ const extraSettingsItems: SettingsItem[] = [
     deniedBody: 'You do not have permission to manage deploy keys.',
   },
   {
-    id: 'pr-events',
-    label: 'PR Events',
+    id: 'agent-settings',
+    label: 'Agent Settings',
     visible: (v) => v.isSuperUser || v.managesAnyNamespace,
     component: PREventsSettingsGlobal,
-    deniedBody: 'You do not have permission to manage PR event settings.',
+    deniedBody: 'You do not have permission to manage agent settings.',
   },
 ]
 
@@ -72,7 +73,7 @@ const coreConfig: CoreScreensConfig = {
   renderProjectSections: (namespace: string, project: string) => (
     <>
       <SeedConfigSection namespace={namespace} project={project} />
-      <PREventsSettingsProject namespace={namespace} project={project} />
+      <AgentSettingsProjectControl namespace={namespace} project={project} />
     </>
   ),
 }

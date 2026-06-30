@@ -8,6 +8,7 @@ import {
 import { Toaster } from './components/Toaster'
 import { CloneUrl } from './components/CloneUrl'
 import { PRTreeView } from './components/PRTreeView'
+import { AgentSettingsProjectControl } from './components/AgentSettingsProjectControl'
 
 const EXPLORER_ICON = (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -223,7 +224,10 @@ function deriveActiveRail(pathname: string, rail: string): string {
 
 const gityardContentConfig = {
   renderProjectExtra: (ns: string, proj: string) => (
-    <CloneUrl namespace={ns} project={proj} />
+    <>
+      <CloneUrl namespace={ns} project={proj} />
+      <AgentSettingsProjectControl namespace={ns} project={proj} />
+    </>
   ),
 }
 

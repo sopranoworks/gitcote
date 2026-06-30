@@ -152,7 +152,7 @@ function ConfirmActionForm({
   )
 }
 
-function PREventsForm({
+export function PREventsForm({
   settings,
   onSave,
   inherited,
@@ -227,7 +227,7 @@ function PREventsForm({
   )
 }
 
-function SeedEventsForm({
+export function SeedEventsForm({
   settings,
   onSave,
   inherited,
