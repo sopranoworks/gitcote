@@ -725,7 +725,7 @@ type createPROutput struct {
 type listPRsInput struct {
 	Namespace   string `json:"namespace" jsonschema:"the namespace"`
 	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
-	State       string `json:"state,omitempty" jsonschema:"filter by state (open/approved/merged/closed); empty=all"`
+	State       string `json:"state,omitempty" jsonschema:"filter by state (open/approved/rejected/merged/closed/interrupted); empty=all"`
 }
 
 type listPRsOutput struct {
@@ -832,6 +832,7 @@ const (
 	MsgPRClose           uiws.MessageType = "PR_CLOSE"
 	MsgPRRetryAgent      uiws.MessageType = "PR_RETRY_AGENT"
 	MsgPRDismissInterrupt uiws.MessageType = "PR_DISMISS_INTERRUPT"
+	MsgPROperatorReject  uiws.MessageType = "PR_OPERATOR_REJECT"
 	MsgAgentList         uiws.MessageType = "AGENT_LIST"
 	MsgPRQueueGet        uiws.MessageType = "PR_QUEUE_GET"
 )
@@ -844,6 +845,7 @@ var PRLevels = map[uiws.MessageType]uiws.Op{
 	MsgPRClose:            {Level: authz.LevelAdmin, Global: false},
 	MsgPRRetryAgent:       {Level: authz.LevelAdmin, Global: false},
 	MsgPRDismissInterrupt: {Level: authz.LevelAdmin, Global: false},
+	MsgPROperatorReject:   {Level: authz.LevelAdmin, Global: false},
 	MsgAgentList:          {Level: authz.LevelRead, Global: true},
 	MsgPRQueueGet:         {Level: authz.LevelRead, Global: false},
 }
@@ -864,6 +866,8 @@ func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType u
 		handlePRRetryAgent(c, gitStore, ec, payload)
 	case MsgPRDismissInterrupt:
 		handlePRDismissInterrupt(c, gitStore, ec, payload)
+	case MsgPROperatorReject:
+		handlePROperatorReject(c, gitStore, ec, payload)
 	case MsgAgentList:
 		handleAgentList(c, ec)
 	case MsgPRQueueGet:
@@ -1139,37 +1143,42 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 
 // --- PR_CLOSE ---
 
-func handlePRClose(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
-	var p prMergePayload
-	if err := json.Unmarshal(payload, &p); err != nil {
-		c.SendError("invalid payload")
-		return
-	}
-	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
+// closePR is the core logic for closing a PR.
+func closePR(gitStore *git.Store, ec *eventContext, ns, proj string, number uint32) (*pr.PullRequest, error) {
+	prStore, err := getPRStore(gitStore.BaseDir(), ns, proj)
 	if err != nil {
-		c.SendError(err.Error())
-		return
+		return nil, err
 	}
-	pullReq, err := prStore.Get(p.Number)
+	pullReq, err := prStore.Get(number)
 	if err != nil {
-		c.SendError(err.Error())
-		return
+		return nil, err
 	}
 	if pullReq.State == pr.StateMerged || pullReq.State == pr.StateClosed {
-		c.SendError(fmt.Sprintf("PR #%d is already %s", p.Number, pullReq.State))
-		return
+		return nil, fmt.Errorf("PR #%d is already %s", number, pullReq.State)
 	}
 	now := time.Now()
 	pullReq.State = pr.StateClosed
 	pullReq.ClosedAt = &now
 	pullReq.UpdatedAt = now
 	if err := prStore.Update(pullReq); err != nil {
+		return nil, err
+	}
+
+	releasePRSlotAndDequeue(ec, ns, proj, int(pullReq.Number))
+	return pullReq, nil
+}
+
+func handlePRClose(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
+	var p prMergePayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	pullReq, err := closePR(gitStore, ec, p.Namespace, p.ProjectName, p.Number)
+	if err != nil {
 		c.SendError(err.Error())
 		return
 	}
-
-	releasePRSlotAndDequeue(ec, p.Namespace, p.ProjectName, int(pullReq.Number))
-
 	c.SendResponse(MsgPRClose, map[string]interface{}{
 		"number": pullReq.Number,
 		"state":  string(pullReq.State),
@@ -1317,6 +1326,74 @@ func handlePRDismissInterrupt(c *uiws.Client, gitStore *git.Store, ec *eventCont
 		"number":  pullReq.Number,
 		"state":   string(pullReq.State),
 		"message": "interrupt dismissed",
+	})
+}
+
+// --- PR_OPERATOR_REJECT ---
+
+type prOperatorRejectPayload struct {
+	Namespace   string `json:"namespace"`
+	ProjectName string `json:"projectName"`
+	PRNumber    uint32 `json:"prNumber"`
+	Reason      string `json:"reason"`
+}
+
+// operatorRejectPR is the core logic for operator-initiated PR rejection (2nd stage).
+// Returns the rejected PR on success.
+func operatorRejectPR(gitStore *git.Store, ec *eventContext, ns, proj string, prNumber uint32, reason string) (*pr.PullRequest, error) {
+	prStore, err := getPRStore(gitStore.BaseDir(), ns, proj)
+	if err != nil {
+		return nil, err
+	}
+	pullReq, err := prStore.Get(prNumber)
+	if err != nil {
+		return nil, err
+	}
+	if pullReq.State != pr.StateApproved {
+		return nil, fmt.Errorf("PR #%d is in state %q, not approved (can only reject approved PRs)", prNumber, pullReq.State)
+	}
+
+	pullReq.State = pr.StateRejected
+	pullReq.UpdatedAt = time.Now()
+	if err := prStore.Update(pullReq); err != nil {
+		return nil, err
+	}
+
+	releasePRSlotAndDequeue(ec, ns, proj, int(pullReq.Number))
+
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "[GitYard] PR rejected by operator: %s/%s PR #%d", ns, proj, pullReq.Number)
+	if reason != "" {
+		fmt.Fprintf(&msg, "\nReason: %s", reason)
+	}
+	if len(pullReq.ReviewFiles) > 0 {
+		fmt.Fprintf(&msg, "\nReview files: %s", strings.Join(pullReq.ReviewFiles, ", "))
+	}
+	if len(pullReq.OrderFiles) > 0 {
+		fmt.Fprintf(&msg, "\nOrder files: %s", strings.Join(pullReq.OrderFiles, ", "))
+	}
+	if len(pullReq.ResultFiles) > 0 {
+		fmt.Fprintf(&msg, "\nResult files: %s", strings.Join(pullReq.ResultFiles, ", "))
+	}
+	notify("log", msg.String(), ns, proj, pullReq.Number, ec.logger)
+
+	return pullReq, nil
+}
+
+func handlePROperatorReject(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
+	var p prOperatorRejectPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	pullReq, err := operatorRejectPR(gitStore, ec, p.Namespace, p.ProjectName, p.PRNumber, p.Reason)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	c.SendResponse(MsgPROperatorReject, map[string]interface{}{
+		"number": pullReq.Number,
+		"state":  string(pullReq.State),
 	})
 }
 

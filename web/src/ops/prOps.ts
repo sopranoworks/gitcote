@@ -23,6 +23,9 @@ export interface PullRequest {
   approved_at?: string
   source_branch_deleted?: boolean
   interrupt_info?: InterruptInfo
+  order_files?: string[]
+  result_files?: string[]
+  review_files?: string[]
 }
 
 export interface InterruptInfo {
@@ -92,4 +95,21 @@ export function prDismissInterrupt(
   number: number,
 ): Promise<{ number: number; state: string; message: string }> {
   return wsClient().request('PR_DISMISS_INTERRUPT', { namespace, projectName, number })
+}
+
+export function prOperatorReject(
+  namespace: string,
+  projectName: string,
+  prNumber: number,
+  reason?: string,
+): Promise<{ number: number; state: string }> {
+  return wsClient().request('PR_OPERATOR_REJECT', { namespace, projectName, prNumber, reason })
+}
+
+export function prClose(
+  namespace: string,
+  projectName: string,
+  number: number,
+): Promise<{ number: number; state: string }> {
+  return wsClient().request('PR_CLOSE', { namespace, projectName, number })
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { prGet, prMerge, prRetryAgent, prDismissInterrupt, type ConflictInfo } from '../ops/prOps'
+import { prGet, prMerge, prRetryAgent, prDismissInterrupt, prOperatorReject, prClose, type ConflictInfo } from '../ops/prOps'
 import { prEventSettingsGet } from '../ops/eventSettingsOps'
 import { serverSshInfo } from '../ops/userSshKeyOps'
 import { PRStatusBadge } from './PRStatusBadge'
@@ -159,6 +159,18 @@ function InterruptedPanel({
   )
 }
 
+function FileRefs({ label, files }: { label: string; files?: string[] }) {
+  if (!files || files.length === 0) return null
+  return (
+    <div style={{ marginTop: '0.5rem' }}>
+      <div style={{ fontSize: '0.82rem', color: 'var(--c-text-dim)' }}>{label}</div>
+      {files.map((f) => (
+        <div key={f} style={{ fontSize: '0.82rem', fontFamily: 'monospace', marginLeft: '0.5rem' }}>{f}</div>
+      ))}
+    </div>
+  )
+}
+
 export function PRDetailView({
   namespace,
   project,
@@ -172,6 +184,9 @@ export function PRDetailView({
 }) {
   const queryClient = useQueryClient()
   const [merging, setMerging] = useState(false)
+  const [rejecting, setRejecting] = useState(false)
+  const [rejectReason, setRejectReason] = useState('')
+  const [closing, setClosing] = useState(false)
 
   const { data, refetch } = useQuery({
     queryKey: ['pr-detail', namespace, project, number],
@@ -214,6 +229,31 @@ export function PRDetailView({
     }
   }
 
+  async function handleOperatorReject() {
+    setRejecting(true)
+    try {
+      await prOperatorReject(namespace, project, number, rejectReason || undefined)
+      setRejectReason('')
+      handleRefresh()
+    } catch {
+      // ignore
+    } finally {
+      setRejecting(false)
+    }
+  }
+
+  async function handleClose() {
+    setClosing(true)
+    try {
+      await prClose(namespace, project, number)
+      handleRefresh()
+    } catch {
+      // ignore
+    } finally {
+      setClosing(false)
+    }
+  }
+
   return (
     <div className={styles.container}>
       <button className={styles.backBtn} onClick={onBack}>
@@ -243,25 +283,65 @@ export function PRDetailView({
         </div>
       )}
 
-      {/* Merge button for approved PRs */}
+      {/* Review report + CONFIRM/REJECT for approved PRs (manual confirm) */}
       {pr.state === 'approved' && !autoConfirm && (
         <div className={styles.section}>
-          <button
-            className={styles.mergeBtn}
-            data-variant="primary"
-            disabled={!mergeable || merging}
-            onClick={() => void handleMerge()}
-            title={!mergeable ? 'Resolve conflicts first' : undefined}
-          >
-            {merging ? 'Merging…' : 'Merge'}
-          </button>
+          <FileRefs label="Review files:" files={pr.review_files} />
+          <div className={styles.actions} style={{ marginTop: '0.75rem' }}>
+            <button
+              className={styles.mergeBtn}
+              data-variant="primary"
+              disabled={!mergeable || merging}
+              onClick={() => void handleMerge()}
+              title={!mergeable ? 'Resolve conflicts first' : undefined}
+            >
+              {merging ? 'Merging…' : 'Confirm (Merge)'}
+            </button>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+              <input
+                type="text"
+                placeholder="Rejection reason (optional)"
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                className={styles.rejectInput}
+                style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.85rem', borderRadius: '4px', border: '1px solid var(--c-border)', background: 'var(--c-bg-input, var(--c-bg))' }}
+              />
+              <button
+                className={styles.actionBtn}
+                data-variant="danger"
+                disabled={rejecting}
+                onClick={() => void handleOperatorReject()}
+              >
+                {rejecting ? 'Rejecting…' : 'Reject'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
       {pr.state === 'approved' && autoConfirm && (
         <div className={styles.section}>
           <div className={styles.autoMerge}>
-            ✓ Auto-merge enabled
+            Auto-merge enabled
+          </div>
+        </div>
+      )}
+
+      {/* Rejected by operator */}
+      {pr.state === 'rejected' && (
+        <div className={styles.section}>
+          <div style={{ color: '#f85149', fontWeight: 600 }}>Rejected by operator</div>
+          <FileRefs label="Review files:" files={pr.review_files} />
+          <FileRefs label="Order files:" files={pr.order_files} />
+          <FileRefs label="Result files:" files={pr.result_files} />
+          <div style={{ marginTop: '0.75rem' }}>
+            <button
+              className={styles.actionBtn}
+              disabled={closing}
+              onClick={() => void handleClose()}
+            >
+              {closing ? 'Closing…' : 'Close'}
+            </button>
           </div>
         </div>
       )}
