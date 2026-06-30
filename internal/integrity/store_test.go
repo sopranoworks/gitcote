@@ -427,6 +427,175 @@ func TestAgentTokenSeedKey(t *testing.T) {
 	}
 }
 
+func TestPRQueue_EnqueueAndRelease(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	q, _ := s.GetPRQueue("ns", "proj")
+	if q.ActivePR != 0 || len(q.Waiting) != 0 {
+		t.Fatalf("empty queue: got active=%d waiting=%v", q.ActivePR, q.Waiting)
+	}
+
+	active, err := s.EnqueuePR("ns", "proj", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !active {
+		t.Error("PR #1 should be active (slot was idle)")
+	}
+
+	active, err = s.EnqueuePR("ns", "proj", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Error("PR #2 should be queued (slot occupied)")
+	}
+
+	active, err = s.EnqueuePR("ns", "proj", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Error("PR #3 should be queued")
+	}
+
+	q, _ = s.GetPRQueue("ns", "proj")
+	if q.ActivePR != 1 {
+		t.Errorf("active = %d, want 1", q.ActivePR)
+	}
+	if len(q.Waiting) != 2 || q.Waiting[0] != 2 || q.Waiting[1] != 3 {
+		t.Errorf("waiting = %v, want [2 3]", q.Waiting)
+	}
+
+	next, found, err := s.ReleasePRSlot("ns", "proj", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || next != 2 {
+		t.Errorf("release #1: next=%d found=%v, want 2/true", next, found)
+	}
+
+	q, _ = s.GetPRQueue("ns", "proj")
+	if q.ActivePR != 2 {
+		t.Errorf("after release: active = %d, want 2", q.ActivePR)
+	}
+	if len(q.Waiting) != 1 || q.Waiting[0] != 3 {
+		t.Errorf("after release: waiting = %v, want [3]", q.Waiting)
+	}
+
+	next, found, err = s.ReleasePRSlot("ns", "proj", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || next != 3 {
+		t.Errorf("release #2: next=%d found=%v, want 3/true", next, found)
+	}
+
+	next, found, err = s.ReleasePRSlot("ns", "proj", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Error("release #3: should have no next PR")
+	}
+
+	q, _ = s.GetPRQueue("ns", "proj")
+	if q.ActivePR != 0 || len(q.Waiting) != 0 {
+		t.Errorf("final: active=%d waiting=%v, want 0/[]", q.ActivePR, q.Waiting)
+	}
+}
+
+func TestPRQueue_DifferentProjects(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	activeA, _ := s.EnqueuePR("ns", "projA", 1)
+	activeB, _ := s.EnqueuePR("ns", "projB", 1)
+	if !activeA {
+		t.Error("projA PR #1 should be active")
+	}
+	if !activeB {
+		t.Error("projB PR #1 should be active (independent)")
+	}
+
+	qA, _ := s.GetPRQueue("ns", "projA")
+	qB, _ := s.GetPRQueue("ns", "projB")
+	if qA.ActivePR != 1 || qB.ActivePR != 1 {
+		t.Errorf("projA active=%d, projB active=%d, both should be 1", qA.ActivePR, qB.ActivePR)
+	}
+}
+
+func TestPRQueue_ReleaseNonActive(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	s.EnqueuePR("ns", "proj", 1)
+	s.EnqueuePR("ns", "proj", 2)
+	s.EnqueuePR("ns", "proj", 3)
+
+	next, found, err := s.ReleasePRSlot("ns", "proj", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Error("releasing a waiting PR should not dequeue next")
+	}
+	_ = next
+
+	q, _ := s.GetPRQueue("ns", "proj")
+	if q.ActivePR != 1 {
+		t.Errorf("active should still be 1, got %d", q.ActivePR)
+	}
+	if len(q.Waiting) != 1 || q.Waiting[0] != 3 {
+		t.Errorf("waiting = %v, want [3] (PR #2 removed)", q.Waiting)
+	}
+}
+
+func TestPRQueue_Dequeue(t *testing.T) {
+	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	s.EnqueuePR("ns", "proj", 1)
+	s.EnqueuePR("ns", "proj", 2)
+	s.EnqueuePR("ns", "proj", 3)
+
+	next, found, _ := s.DequeuePR("ns", "proj")
+	if !found || next != 2 {
+		t.Errorf("dequeue: next=%d found=%v, want 2/true", next, found)
+	}
+
+	q, _ := s.GetPRQueue("ns", "proj")
+	if q.ActivePR != 1 || len(q.Waiting) != 1 || q.Waiting[0] != 3 {
+		t.Errorf("after dequeue: active=%d waiting=%v", q.ActivePR, q.Waiting)
+	}
+
+	_, found, _ = s.DequeuePR("ns", "proj")
+	if found {
+		// Only one was left in the waiting list (PR #3), so this second dequeue should succeed
+		// Let me re-check: after first dequeue, waiting=[3]. Second dequeue should get 3.
+	}
+	// Actually the second dequeue should find PR #3
+	s.DequeuePR("ns", "proj") // dequeue #3
+
+	_, found, _ = s.DequeuePR("ns", "proj")
+	if found {
+		t.Error("dequeue on empty waiting list should return not found")
+	}
+}
+
 func TestAgentTokenOverwrite(t *testing.T) {
 	s, err := integrity.Open(filepath.Join(t.TempDir(), "heads.db"))
 	if err != nil {

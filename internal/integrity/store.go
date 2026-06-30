@@ -16,6 +16,7 @@ var (
 	bucketAgentTokens       = []byte("agent_tokens")
 	bucketPREventSettings   = []byte("pr_event_settings")
 	bucketSeedEventSettings = []byte("seed_event_settings")
+	bucketPRQueues          = []byte("pr_queues")
 )
 
 // Store persists the last-known HEAD hash for each managed repository,
@@ -63,7 +64,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open integrity store: %w", err)
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketHeads, bucketTempClones, bucketAgentWorkdirs, bucketAgentTokens, bucketPREventSettings, bucketSeedEventSettings} {
+		for _, b := range [][]byte{bucketHeads, bucketTempClones, bucketAgentWorkdirs, bucketAgentTokens, bucketPREventSettings, bucketSeedEventSettings, bucketPRQueues} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -546,4 +547,129 @@ func (s *Store) ListAgentTokens() ([]AgentTokenRecord, error) {
 		})
 	})
 	return recs, err
+}
+
+// --- PR Queue ---
+
+// PRQueue tracks the per-project PR processing queue.
+type PRQueue struct {
+	ActivePR int   `json:"active_pr"`
+	Waiting  []int `json:"waiting"`
+}
+
+func prQueueKey(ns, proj string) string { return ns + "/" + proj }
+
+// GetPRQueue returns the queue state for a project.
+func (s *Store) GetPRQueue(ns, proj string) (PRQueue, error) {
+	key := prQueueKey(ns, proj)
+	var q PRQueue
+	err := s.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(bucketPRQueues).Get([]byte(key))
+		if v == nil {
+			return nil
+		}
+		return json.Unmarshal(v, &q)
+	})
+	if q.Waiting == nil {
+		q.Waiting = []int{}
+	}
+	return q, err
+}
+
+// EnqueuePR adds a PR to the project's queue. If no PR is active, it becomes
+// the active PR (isActive=true). Otherwise it's appended to the waiting list.
+func (s *Store) EnqueuePR(ns, proj string, prNumber int) (isActive bool, err error) {
+	key := prQueueKey(ns, proj)
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketPRQueues)
+		var q PRQueue
+		if v := b.Get([]byte(key)); v != nil {
+			if uerr := json.Unmarshal(v, &q); uerr != nil {
+				q = PRQueue{}
+			}
+		}
+		if q.ActivePR == 0 {
+			q.ActivePR = prNumber
+			isActive = true
+		} else {
+			if q.Waiting == nil {
+				q.Waiting = []int{}
+			}
+			q.Waiting = append(q.Waiting, prNumber)
+			isActive = false
+		}
+		data, jerr := json.Marshal(q)
+		if jerr != nil {
+			return jerr
+		}
+		return b.Put([]byte(key), data)
+	})
+	return
+}
+
+// ReleasePRSlot releases the processing slot for the given PR number.
+// If there are waiting PRs, the next one becomes active and is returned.
+func (s *Store) ReleasePRSlot(ns, proj string, prNumber int) (nextPR int, found bool, err error) {
+	key := prQueueKey(ns, proj)
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketPRQueues)
+		var q PRQueue
+		if v := b.Get([]byte(key)); v != nil {
+			if uerr := json.Unmarshal(v, &q); uerr != nil {
+				return nil
+			}
+		}
+		if q.ActivePR == prNumber {
+			if len(q.Waiting) > 0 {
+				nextPR = q.Waiting[0]
+				q.Waiting = q.Waiting[1:]
+				q.ActivePR = nextPR
+				found = true
+			} else {
+				q.ActivePR = 0
+			}
+		} else {
+			for i, w := range q.Waiting {
+				if w == prNumber {
+					q.Waiting = append(q.Waiting[:i], q.Waiting[i+1:]...)
+					break
+				}
+			}
+		}
+		if q.Waiting == nil {
+			q.Waiting = []int{}
+		}
+		data, jerr := json.Marshal(q)
+		if jerr != nil {
+			return jerr
+		}
+		return b.Put([]byte(key), data)
+	})
+	return
+}
+
+// DequeuePR pops the first waiting PR without releasing the active slot.
+func (s *Store) DequeuePR(ns, proj string) (nextPR int, found bool, err error) {
+	key := prQueueKey(ns, proj)
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketPRQueues)
+		var q PRQueue
+		if v := b.Get([]byte(key)); v != nil {
+			if uerr := json.Unmarshal(v, &q); uerr != nil {
+				return nil
+			}
+		}
+		if len(q.Waiting) > 0 {
+			nextPR = q.Waiting[0]
+			q.Waiting = q.Waiting[1:]
+			found = true
+			data, jerr := json.Marshal(q)
+			if jerr != nil {
+				return jerr
+			}
+			return b.Put([]byte(key), data)
+		}
+		return nil
+	})
+	return
 }

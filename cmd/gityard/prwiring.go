@@ -194,7 +194,17 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 		return
 	}
 	logger.Info("pr created", "number", num, "source", sourceBranch, "target", target, "mergeable", mergeable)
-	if ec != nil {
+	if ec != nil && ec.integrityHS != nil {
+		isActive, qerr := ec.integrityHS.EnqueuePR(namespace, project, int(num))
+		if qerr != nil {
+			logger.Error("enqueue PR", "error", qerr)
+		}
+		if isActive {
+			go onPRCreated(ec, newPR)
+		} else {
+			logger.Info("PR queued, waiting for active PR to complete", "pr", num, "namespace", namespace, "project", project)
+		}
+	} else if ec != nil {
 		go onPRCreated(ec, newPR)
 	}
 }
@@ -362,7 +372,15 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if err != nil {
 			return nil, createPROutput{}, err
 		}
-		if ec != nil {
+		if ec != nil && ec.integrityHS != nil {
+			isActive, qerr := ec.integrityHS.EnqueuePR(in.Namespace, in.ProjectName, int(num))
+			if qerr != nil {
+				slog.Default().Error("enqueue PR", "error", qerr)
+			}
+			if isActive {
+				go onPRCreated(ec, newPR)
+			}
+		} else if ec != nil {
 			go onPRCreated(ec, newPR)
 		}
 		return nil, createPROutput{Number: num, State: string(pr.StateOpen)}, nil
@@ -554,6 +572,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if err := prStore.Update(p); err != nil {
 			return nil, rejectPROutput{}, err
 		}
+		releasePRSlotAndDequeue(ec, in.Namespace, in.ProjectName, int(p.Number))
 		go onPRRejected(ec, p)
 		return nil, rejectPROutput{Number: p.Number, State: string(p.State)}, nil
 	})
@@ -803,6 +822,7 @@ const (
 	MsgPRRetryAgent      uiws.MessageType = "PR_RETRY_AGENT"
 	MsgPRDismissInterrupt uiws.MessageType = "PR_DISMISS_INTERRUPT"
 	MsgAgentList         uiws.MessageType = "AGENT_LIST"
+	MsgPRQueueGet        uiws.MessageType = "PR_QUEUE_GET"
 )
 
 var PRLevels = map[uiws.MessageType]uiws.Op{
@@ -814,6 +834,7 @@ var PRLevels = map[uiws.MessageType]uiws.Op{
 	MsgPRRetryAgent:       {Level: authz.LevelAdmin, Global: false},
 	MsgPRDismissInterrupt: {Level: authz.LevelAdmin, Global: false},
 	MsgAgentList:          {Level: authz.LevelRead, Global: true},
+	MsgPRQueueGet:         {Level: authz.LevelRead, Global: false},
 }
 
 func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType uiws.MessageType, payload json.RawMessage) bool {
@@ -827,13 +848,15 @@ func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType u
 	case MsgPRMerge:
 		handlePRMerge(c, gitStore, ec, payload)
 	case MsgPRClose:
-		handlePRClose(c, gitStore, payload)
+		handlePRClose(c, gitStore, ec, payload)
 	case MsgPRRetryAgent:
 		handlePRRetryAgent(c, gitStore, ec, payload)
 	case MsgPRDismissInterrupt:
 		handlePRDismissInterrupt(c, gitStore, ec, payload)
 	case MsgAgentList:
 		handleAgentList(c, ec)
+	case MsgPRQueueGet:
+		handlePRQueueGet(c, ec, payload)
 	default:
 		return false
 	}
@@ -1085,6 +1108,8 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 
 	invalidateApprovalsForPush(gitStore, slog.Default(), p.Namespace, p.ProjectName)
 
+	releasePRSlotAndDequeue(ec, p.Namespace, p.ProjectName, int(pullReq.Number))
+
 	sc := ec.seedCtx
 	if sc != nil {
 		go triggerOnMergePush(sc, p.Namespace, p.ProjectName, pullReq.TargetBranch)
@@ -1100,7 +1125,7 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 
 // --- PR_CLOSE ---
 
-func handlePRClose(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
+func handlePRClose(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
 	var p prMergePayload
 	if err := json.Unmarshal(payload, &p); err != nil {
 		c.SendError("invalid payload")
@@ -1128,6 +1153,9 @@ func handlePRClose(c *uiws.Client, gitStore *git.Store, payload json.RawMessage)
 		c.SendError(err.Error())
 		return
 	}
+
+	releasePRSlotAndDequeue(ec, p.Namespace, p.ProjectName, int(pullReq.Number))
+
 	c.SendResponse(MsgPRClose, map[string]interface{}{
 		"number": pullReq.Number,
 		"state":  string(pullReq.State),
@@ -1275,6 +1303,37 @@ func handlePRDismissInterrupt(c *uiws.Client, gitStore *git.Store, ec *eventCont
 		"number":  pullReq.Number,
 		"state":   string(pullReq.State),
 		"message": "interrupt dismissed",
+	})
+}
+
+// --- PR_QUEUE_GET ---
+
+type prQueueGetPayload struct {
+	Namespace   string `json:"namespace"`
+	ProjectName string `json:"projectName"`
+}
+
+func handlePRQueueGet(c *uiws.Client, ec *eventContext, payload json.RawMessage) {
+	var p prQueueGetPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	if ec.integrityHS == nil {
+		c.SendResponse(MsgPRQueueGet, map[string]interface{}{
+			"active_pr": 0,
+			"waiting":   []int{},
+		})
+		return
+	}
+	q, err := ec.integrityHS.GetPRQueue(p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	c.SendResponse(MsgPRQueueGet, map[string]interface{}{
+		"active_pr": q.ActivePR,
+		"waiting":   q.Waiting,
 	})
 }
 

@@ -211,6 +211,7 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 		if serr == nil {
 			markInterrupted(prStore, p, "agent_spawn_failed", fmt.Sprintf("scan configs: %v", err), action.AgentName, role, ec.logger)
 		}
+		releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 		return
 	}
 
@@ -230,6 +231,7 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 		if serr == nil {
 			markInterrupted(prStore, p, "agent_spawn_failed", "no agent config found for role: "+role, action.AgentName, role, ec.logger)
 		}
+		releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 		return
 	}
 
@@ -269,6 +271,7 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 		if serr == nil {
 			markInterrupted(prStore, p, "agent_spawn_failed", detail, ac.DirName, role, ec.logger)
 		}
+		releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 	}
 }
 
@@ -414,6 +417,34 @@ func executeWithActivityTimeout(ec *eventContext, ac *agent.AgentConfig, spawnCt
 	}
 }
 
+// releasePRSlotAndDequeue releases the queue slot for a completed PR and
+// spawns the reviewer for the next queued PR if one exists.
+func releasePRSlotAndDequeue(ec *eventContext, ns, proj string, prNumber int) {
+	if ec.integrityHS == nil {
+		return
+	}
+	nextPR, found, err := ec.integrityHS.ReleasePRSlot(ns, proj, prNumber)
+	if err != nil {
+		ec.logger.Error("release PR slot", "error", err, "pr", prNumber)
+		return
+	}
+	if !found {
+		return
+	}
+	prStore, err := getPRStore(ec.gitStore.BaseDir(), ns, proj)
+	if err != nil {
+		ec.logger.Error("get PR store for dequeue", "error", err)
+		return
+	}
+	p, err := prStore.Get(uint32(nextPR))
+	if err != nil {
+		ec.logger.Error("get dequeued PR", "error", err, "pr", nextPR)
+		return
+	}
+	ec.logger.Info("PR dequeued, spawning reviewer", "pr", nextPR, "namespace", ns, "project", proj)
+	go onPRCreated(ec, p)
+}
+
 // --- PR Event Hooks ---
 
 // onPRCreated fires when a new PR is created.
@@ -541,6 +572,8 @@ func autoMergePR(ec *eventContext, p *pr.PullRequest) error {
 	}
 
 	invalidateApprovalsForPush(ec.gitStore, ec.logger, p.RepoNamespace, p.RepoProject)
+
+	releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 
 	return nil
 }
