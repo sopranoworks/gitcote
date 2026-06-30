@@ -106,11 +106,13 @@ func issueAgentToken(ec *eventContext, namespace, project string, prNumber int, 
 
 	ttl := ec.agentCfg.TimeoutDuration()
 	now := time.Now()
+	name := fmt.Sprintf("%s-%s", role, agentTokenKey(namespace, project, prNumber))
 	rec, err := ec.oauthStore.NewSeries(
 		agentTokenClientID,
 		oauthstore.Principal{Name: "agent-token", Email: "agent@gityard.local"},
 		"",
 		scope,
+		name,
 		now,
 		ttl,
 		ttl,

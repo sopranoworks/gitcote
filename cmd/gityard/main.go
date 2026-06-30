@@ -249,7 +249,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	if oauthStore != nil {
 		core.SetOAuthStore(oauthStore)
 		// Token-to-self: mint a CLI access token for the operator (OAUTH_ISSUE_SELF).
-		core.SetOAuthSelfIssuer(uiws.OAuthSelfIssuerFunc(func(r *http.Request, accessTTL time.Duration, extraPermissions map[string]any) (string, time.Time, error) {
+		core.SetOAuthSelfIssuer(uiws.OAuthSelfIssuerFunc(func(r *http.Request, name, scope string, accessTTL time.Duration, extraPermissions map[string]any) (string, time.Time, error) {
 			base, berr := serverurl.Base(cfg.Server.MCP.OAuth.ExternalURL, r)
 			if berr != nil {
 				return "", time.Time{}, berr
@@ -261,7 +261,8 @@ func run(cfg *Config, logger *slog.Logger) error {
 				oauthstore.SelfIssuedClientID,
 				oauthstore.Principal{Name: cfg.Identity.User.Name, Email: cfg.Identity.User.Email},
 				serverurl.ResourceURL(base),
-				"*",
+				scope,
+				name,
 				time.Now(),
 				accessTTL,
 				accessTTL,

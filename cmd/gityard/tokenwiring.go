@@ -91,6 +91,7 @@ func registerTokenTools(mcpServer *mcp.Server, gitStore *git.Store, oauthStore *
 			oauthstore.Principal{Name: "git-token", Email: principal.Email},
 			"",
 			scope,
+			"",
 			now,
 			ttlDur,
 			ttlDur,
