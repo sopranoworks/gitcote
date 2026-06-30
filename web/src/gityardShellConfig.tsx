@@ -7,7 +7,7 @@ import {
 } from '@shoka/web-core'
 import { Toaster } from './components/Toaster'
 import { CloneUrl } from './components/CloneUrl'
-import { PRListSection } from './components/PRListSection'
+import { PRTreeView } from './components/PRTreeView'
 
 const EXPLORER_ICON = (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -27,6 +27,15 @@ const HISTORY_ICON = (
     <path d="M4 12a8 8 0 1 0 2.5-5.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     <path d="M4 4v3h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     <path d="M12 8v4l3 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+const PR_ICON = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+    <circle cx="6" cy="6" r="2.5" stroke="currentColor" strokeWidth="1.4" />
+    <circle cx="6" cy="18" r="2.5" stroke="currentColor" strokeWidth="1.4" />
+    <circle cx="18" cy="18" r="2.5" stroke="currentColor" strokeWidth="1.4" />
+    <path d="M6 8.5v7M18 15.5V10a2 2 0 0 0-2-2H9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
   </svg>
 )
 
@@ -127,6 +136,7 @@ function useGitYardRailControls(
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const onProjectRoute = pathname.startsWith('/p/')
   const onHistoryRoute = /^\/p\/[^/]+\/[^/]+\/history(\/|$)/.test(pathname)
+  const onPRsRoute = /^\/p\/[^/]+\/[^/]+\/prs/.test(pathname)
   const onSettingsRoute = isSettingsPath(pathname)
 
   const onSelect = useCallback(
@@ -145,7 +155,7 @@ function useGitYardRailControls(
         return
       }
 
-      if (v === 'explorer' && onSettingsRoute) {
+      if (v === 'explorer' && (onSettingsRoute || onPRsRoute)) {
         setRail('explorer')
         setSidebarOpen(true)
         const ref = parseProjectPrefix(pathname)
@@ -179,11 +189,18 @@ function useGitYardRailControls(
           void navigate({ to: '/p/$namespace/$project/history/$', params: { namespace: ref.ns, project: ref.proj, _splat: ref.path ?? '' } })
         }
       }
+
+      if (v === 'prs') {
+        const ref = parseProjectPrefix(pathname)
+        if (ref) {
+          void navigate({ to: '/p/$namespace/$project/prs', params: { namespace: ref.ns, project: ref.proj } })
+        }
+      }
     },
-    [onProjectRoute, onHistoryRoute, onSettingsRoute, rail, sidebarOpen, pathname, navigate, setRail, setSidebarOpen],
+    [onProjectRoute, onHistoryRoute, onPRsRoute, onSettingsRoute, rail, sidebarOpen, pathname, navigate, setRail, setSidebarOpen],
   )
 
-  return { onSelect, disabledItems: onProjectRoute ? [] : ['explorer', 'search', 'history'] }
+  return { onSelect, disabledItems: onProjectRoute ? [] : ['explorer', 'search', 'history', 'prs'] }
 }
 
 function useResetRailOnProjectChange(setRail: (v: string) => void): void {
@@ -199,15 +216,14 @@ function useResetRailOnProjectChange(setRail: (v: string) => void): void {
 }
 
 function deriveActiveRail(pathname: string, rail: string): string {
-  return isSettingsPath(pathname) ? 'settings' : rail === 'settings' ? 'explorer' : rail
+  if (isSettingsPath(pathname)) return 'settings'
+  if (/^\/p\/[^/]+\/[^/]+\/prs/.test(pathname)) return 'prs'
+  return rail === 'settings' ? 'explorer' : rail
 }
 
 const gityardContentConfig = {
   renderProjectExtra: (ns: string, proj: string) => (
-    <>
-      <CloneUrl namespace={ns} project={proj} />
-      <PRListSection namespace={ns} project={proj} />
-    </>
+    <CloneUrl namespace={ns} project={proj} />
   ),
 }
 
@@ -221,9 +237,13 @@ export const gityardShellConfig: ShellConfig = {
     { id: 'explorer', label: 'Explorer', icon: EXPLORER_ICON },
     { id: 'search', label: 'Search', icon: SEARCH_ICON },
     { id: 'history', label: 'History', icon: HISTORY_ICON },
+    { id: 'prs', label: 'Pull Requests', icon: PR_ICON },
     { id: 'settings', label: 'Settings', icon: SETTINGS_ICON },
   ],
-  renderSidebar: (view) => <Sidebar view={view} />,
+  renderSidebar: (view) => {
+    if (view === 'prs') return <PRTreeView />
+    return <Sidebar view={view} />
+  },
   renderBreadcrumbs: (styles) => <GitYardBreadcrumbs styles={styles} />,
   renderToaster: () => <Toaster />,
   shellWrapper: GitYardShellWrapper,

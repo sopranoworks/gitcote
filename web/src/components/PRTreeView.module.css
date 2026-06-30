@@ -1,0 +1,85 @@
+.filterBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-2) 0;
+}
+
+.filterSelect {
+  flex: 1;
+  min-width: 0;
+  background: var(--c-bg-inset);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  padding: 3px 4px;
+  cursor: pointer;
+}
+.filterSelect:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+
+.sortBtn {
+  flex: none;
+  background: var(--c-bg-inset);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+  padding: 3px 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.sortBtn:hover {
+  color: var(--c-text);
+  border-color: var(--c-accent);
+}
+
+.listWrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-1) 0;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px var(--sp-2);
+  cursor: pointer;
+  transition: background 0.12s;
+  user-select: none;
+}
+.item:hover {
+  background: var(--c-hover);
+}
+.item[data-selected] {
+  background: var(--c-active, rgba(79, 124, 255, 0.18));
+}
+
+.prNumber {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--c-text-faint);
+  min-width: 28px;
+}
+
+.prTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

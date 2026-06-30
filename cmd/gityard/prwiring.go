@@ -835,6 +835,7 @@ const (
 	MsgPROperatorReject  uiws.MessageType = "PR_OPERATOR_REJECT"
 	MsgAgentList         uiws.MessageType = "AGENT_LIST"
 	MsgPRQueueGet        uiws.MessageType = "PR_QUEUE_GET"
+	MsgPRReview          uiws.MessageType = "PR_REVIEW"
 )
 
 var PRLevels = map[uiws.MessageType]uiws.Op{
@@ -848,6 +849,7 @@ var PRLevels = map[uiws.MessageType]uiws.Op{
 	MsgPROperatorReject:   {Level: authz.LevelAdmin, Global: false},
 	MsgAgentList:          {Level: authz.LevelRead, Global: true},
 	MsgPRQueueGet:         {Level: authz.LevelRead, Global: false},
+	MsgPRReview:           {Level: authz.LevelAdmin, Global: false},
 }
 
 func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType uiws.MessageType, payload json.RawMessage) bool {
@@ -872,6 +874,8 @@ func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType u
 		handleAgentList(c, ec)
 	case MsgPRQueueGet:
 		handlePRQueueGet(c, ec, payload)
+	case MsgPRReview:
+		handlePRReview(c, gitStore, ec, payload)
 	default:
 		return false
 	}
@@ -1450,5 +1454,43 @@ func handleAgentList(c *uiws.Client, ec *eventContext) {
 		})
 	}
 	c.SendResponse(MsgAgentList, map[string]interface{}{"agents": agents})
+}
+
+// --- PR_REVIEW ---
+
+type prReviewPayload struct {
+	Namespace   string `json:"namespace"`
+	ProjectName string `json:"projectName"`
+	Number      uint32 `json:"number"`
+}
+
+func handlePRReview(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
+	var p prReviewPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+
+	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	prObj, err := prStore.Get(p.Number)
+	if err != nil {
+		c.SendError(fmt.Sprintf("PR #%d not found", p.Number))
+		return
+	}
+	if prObj.State != pr.StateOpen {
+		c.SendError(fmt.Sprintf("PR #%d is not open (state: %s)", p.Number, prObj.State))
+		return
+	}
+
+	go onPRCreated(ec, prObj)
+
+	c.SendResponse(MsgPRReview, map[string]interface{}{
+		"number":  prObj.Number,
+		"message": "review triggered",
+	})
 }
 

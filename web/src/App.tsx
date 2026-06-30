@@ -25,6 +25,7 @@ import { SshKeysPage } from './components/SshKeysPage'
 import { UserSshKeysSection } from './components/UserSshKeysSection'
 import { ResumeBanner } from './components/ResumeBanner'
 import { PREventsSettingsGlobal, PREventsSettingsProject } from './components/PREventsSettings'
+import { PRViewPane } from './components/PRViewPane'
 
 function SettingsResumeBanner() {
   const item = useRouterState({ select: (s) => (s.location.search as { item?: string }).item })
@@ -149,6 +150,18 @@ const searchRoute = createRoute({
   component: SearchPage,
 })
 
+interface PRsSearch { pr?: string }
+
+const prsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/p/$namespace/$project/prs',
+  validateSearch: (search: Record<string, unknown>): PRsSearch => {
+    const pr = typeof search.pr === 'string' && search.pr ? search.pr : undefined
+    return pr ? { pr } : {}
+  },
+  component: PRViewPane,
+})
+
 const connectionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin/connections',
@@ -184,6 +197,7 @@ const routeTree = rootRoute.addChildren([
   blobRoute,
   historyRoute,
   searchRoute,
+  prsRoute,
   connectionsRoute,
   projectSettingsRoute,
   settingsRoute,
