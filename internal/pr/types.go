@@ -60,4 +60,5 @@ type PullRequest struct {
 	InterruptInfo       *InterruptInfo `json:"interrupt_info,omitempty"`
 	OrderFiles          []string       `json:"order_files"`
 	ResultFiles         []string       `json:"result_files"`
+	ReviewFiles         []string       `json:"review_files"`
 }

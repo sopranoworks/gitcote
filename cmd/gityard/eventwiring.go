@@ -285,6 +285,7 @@ func executeAgentForPR(ec *eventContext, ac *agent.AgentConfig, p *pr.PullReques
 		TargetBranch: p.TargetBranch,
 		OrderFiles:   strings.Join(p.OrderFiles, ","),
 		ResultFiles:  strings.Join(p.ResultFiles, ","),
+		ReviewFiles:  strings.Join(p.ReviewFiles, ","),
 	}
 
 	token, terr := issueAgentToken(ec, p.RepoNamespace, p.RepoProject, int(p.Number), p.SourceBranch, ac.DirName, role)

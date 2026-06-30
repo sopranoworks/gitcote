@@ -28,6 +28,7 @@ type SpawnContext struct {
 	ConflictFiles string
 	OrderFiles   string
 	ResultFiles  string
+	ReviewFiles  string
 	Token        string
 }
 
@@ -186,6 +187,7 @@ func buildVarMap(ctx *SpawnContext, workDir string) map[string]string {
 		"$CONFLICT_FILES":  ctx.ConflictFiles,
 		"$ORDER_FILES":     ctx.OrderFiles,
 		"$RESULT_FILES":    ctx.ResultFiles,
+		"$REVIEW_FILES":    ctx.ReviewFiles,
 		"$TOKEN":           ctx.Token,
 		"$WORK_DIR":        workDir,
 	}

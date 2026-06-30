@@ -169,12 +169,17 @@ func TestFullE2E_PushToMerge(t *testing.T) {
 		t.Fatalf("MCP connect: %v", err)
 	}
 
+	reviewFiles := []any{
+		"/test/prtest/reviews/2026-06-30-pr1-review.md",
+		"/test/prtest/reviews/2026-06-30-pr1-notes.md",
+	}
 	approveResult, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "approve_pull_request",
 		Arguments: map[string]any{
 			"namespace":    ns,
 			"project_name": proj,
 			"number":       float64(thePR.Number),
+			"review_files": reviewFiles,
 		},
 	})
 	if err != nil {
@@ -183,6 +188,19 @@ func TestFullE2E_PushToMerge(t *testing.T) {
 	if approveResult.IsError {
 		t.Fatal("approve_pull_request returned error")
 	}
+
+	approved, err := prStore.Get(thePR.Number)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(approved.ReviewFiles) != 2 {
+		t.Fatalf("approved PR review_files = %v, want 2 entries", approved.ReviewFiles)
+	}
+	if approved.ReviewFiles[0] != "/test/prtest/reviews/2026-06-30-pr1-review.md" ||
+		approved.ReviewFiles[1] != "/test/prtest/reviews/2026-06-30-pr1-notes.md" {
+		t.Fatalf("approved PR review_files = %v, unexpected values", approved.ReviewFiles)
+	}
+	t.Logf("Step 4a PASS: review_files stored on approve: %v", approved.ReviewFiles)
 
 	// Wait for auto-merge goroutine
 	deadline := time.Now().Add(5 * time.Second)
@@ -249,6 +267,125 @@ func TestFullE2E_PushToMerge(t *testing.T) {
 		t.Fatalf("closed PR state = %q, want closed", closed.State)
 	}
 	t.Logf("Step 5 PASS: PR #%d closed", stalePR.Number)
+
+	// --- Step 6: Reject PR with review_files ---
+	runGitE2E(t, repoDir, "checkout", "main")
+	runGitE2E(t, repoDir, "pull", "origin", "main")
+	runGitE2E(t, repoDir, "checkout", "-b", "feat/reject-test")
+	writeTestFile(t, repoDir, "reject.go", "package main\n")
+	runGitE2E(t, repoDir, "add", "reject.go")
+	runGitE2E(t, repoDir, "commit", "-m", "reject test change")
+	runGitE2E(t, repoDir, "push", "-u", "origin", "feat/reject-test",
+		"-o", "pull_request.create",
+		"-o", "pull_request.title=Reject test PR",
+	)
+
+	openPRs2, _ := prStore.List(pr.StateOpen)
+	if len(openPRs2) == 0 {
+		t.Fatal("no open PR for reject test")
+	}
+	rejectPR := openPRs2[0]
+
+	rejectReviewFiles := []any{"/test/prtest/reviews/2026-06-30-reject-review.md"}
+	rejectResult, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "reject_pull_request",
+		Arguments: map[string]any{
+			"namespace":    ns,
+			"project_name": proj,
+			"number":       float64(rejectPR.Number),
+			"reason":       "needs changes",
+			"review_files": rejectReviewFiles,
+		},
+	})
+	if err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	if rejectResult.IsError {
+		t.Fatal("reject_pull_request returned error")
+	}
+
+	rejected, err := prStore.Get(rejectPR.Number)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejected.State != pr.StateRejected {
+		t.Fatalf("rejected PR state = %q, want rejected", rejected.State)
+	}
+	if len(rejected.ReviewFiles) != 1 || rejected.ReviewFiles[0] != "/test/prtest/reviews/2026-06-30-reject-review.md" {
+		t.Fatalf("rejected PR review_files = %v, want [/test/prtest/reviews/2026-06-30-reject-review.md]", rejected.ReviewFiles)
+	}
+	t.Logf("Step 6 PASS: reject with review_files stored: %v", rejected.ReviewFiles)
+
+	// --- Step 7: Approve without review_files → empty array ---
+	runGitE2E(t, repoDir, "checkout", "main")
+	runGitE2E(t, repoDir, "pull", "origin", "main")
+	runGitE2E(t, repoDir, "checkout", "-b", "feat/no-review-files")
+	writeTestFile(t, repoDir, "noreview.go", "package main\n")
+	runGitE2E(t, repoDir, "add", "noreview.go")
+	runGitE2E(t, repoDir, "commit", "-m", "no review files test")
+	runGitE2E(t, repoDir, "push", "-u", "origin", "feat/no-review-files",
+		"-o", "pull_request.create",
+		"-o", "pull_request.title=No review files PR",
+	)
+
+	openPRs3, _ := prStore.List(pr.StateOpen)
+	if len(openPRs3) == 0 {
+		t.Fatal("no open PR for no-review-files test")
+	}
+	noReviewPR := openPRs3[0]
+
+	approveResult2, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "approve_pull_request",
+		Arguments: map[string]any{
+			"namespace":    ns,
+			"project_name": proj,
+			"number":       float64(noReviewPR.Number),
+		},
+	})
+	if err != nil {
+		t.Fatalf("approve without review_files: %v", err)
+	}
+	if approveResult2.IsError {
+		t.Fatal("approve_pull_request without review_files returned error")
+	}
+
+	approvedNoRF, err := prStore.Get(noReviewPR.Number)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(approvedNoRF.ReviewFiles) != 0 {
+		t.Fatalf("approved PR without review_files has review_files = %v, want empty", approvedNoRF.ReviewFiles)
+	}
+	t.Logf("Step 7 PASS: approve without review_files → empty (len=%d)", len(approvedNoRF.ReviewFiles))
+
+	// --- Step 8: get_pull_request returns review_files ---
+	getResult, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "get_pull_request",
+		Arguments: map[string]any{
+			"namespace":    ns,
+			"project_name": proj,
+			"number":       float64(thePR.Number),
+		},
+	})
+	if err != nil {
+		t.Fatalf("get_pull_request: %v", err)
+	}
+	if getResult.IsError {
+		t.Fatal("get_pull_request returned error")
+	}
+	getText := ""
+	for _, c := range getResult.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			getText = tc.Text
+		}
+	}
+	if !strings.Contains(getText, "review_files") {
+		t.Fatalf("get_pull_request response missing review_files field: %s", getText)
+	}
+	if !strings.Contains(getText, "/test/prtest/reviews/2026-06-30-pr1-review.md") {
+		t.Fatalf("get_pull_request response missing review file path: %s", getText)
+	}
+	t.Logf("Step 8 PASS: get_pull_request returns review_files")
 }
 
 func TestAutoMergePR_EmptyRepo(t *testing.T) {

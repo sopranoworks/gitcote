@@ -425,6 +425,9 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if p.ResultFiles == nil {
 			p.ResultFiles = []string{}
 		}
+		if p.ReviewFiles == nil {
+			p.ReviewFiles = []string{}
+		}
 		out := getPROutput{PullRequest: p}
 		if p.State == pr.StateInterrupted {
 			out.InterruptedPreviousStatus = string(p.PreviousState)
@@ -486,6 +489,9 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		p.ApprovedBy = approver
 		p.ApprovedAt = &now
 		p.UpdatedAt = now
+		if len(in.ReviewFiles) > 0 {
+			p.ReviewFiles = in.ReviewFiles
+		}
 		if err := prStore.Update(p); err != nil {
 			return nil, approvePROutput{}, err
 		}
@@ -569,6 +575,9 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		}
 		p.State = pr.StateRejected
 		p.UpdatedAt = time.Now()
+		if len(in.ReviewFiles) > 0 {
+			p.ReviewFiles = in.ReviewFiles
+		}
 		if err := prStore.Update(p); err != nil {
 			return nil, rejectPROutput{}, err
 		}
@@ -730,9 +739,10 @@ type getPRInput struct {
 }
 
 type approvePRInput struct {
-	Namespace   string `json:"namespace" jsonschema:"the namespace"`
-	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
-	Number      uint32 `json:"number" jsonschema:"required,the PR number"`
+	Namespace   string   `json:"namespace" jsonschema:"the namespace"`
+	ProjectName string   `json:"project_name" jsonschema:"required,the project name"`
+	Number      uint32   `json:"number" jsonschema:"required,the PR number"`
+	ReviewFiles []string `json:"review_files,omitempty" jsonschema:"optional B-47 absolute paths for review files"`
 }
 
 type approvePROutput struct {
@@ -749,10 +759,11 @@ type getPROutput struct {
 }
 
 type rejectPRInput struct {
-	Namespace   string `json:"namespace" jsonschema:"the namespace"`
-	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
-	Number      uint32 `json:"number" jsonschema:"required,the PR number"`
-	Reason      string `json:"reason,omitempty" jsonschema:"optional rejection reason"`
+	Namespace   string   `json:"namespace" jsonschema:"the namespace"`
+	ProjectName string   `json:"project_name" jsonschema:"required,the project name"`
+	Number      uint32   `json:"number" jsonschema:"required,the PR number"`
+	Reason      string   `json:"reason,omitempty" jsonschema:"optional rejection reason"`
+	ReviewFiles []string `json:"review_files,omitempty" jsonschema:"optional B-47 absolute paths for review files"`
 }
 
 type rejectPROutput struct {
@@ -975,6 +986,9 @@ func handlePRGet(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
 	}
 	if pullReq.ResultFiles == nil {
 		pullReq.ResultFiles = []string{}
+	}
+	if pullReq.ReviewFiles == nil {
+		pullReq.ReviewFiles = []string{}
 	}
 
 	resp := map[string]interface{}{
