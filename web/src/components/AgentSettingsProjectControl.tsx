@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useIsSuperUser } from '@shoka/web-core'
 import {
   prEventSettingsGet,
   prEventSettingsSetProject,
@@ -18,6 +19,7 @@ export function AgentSettingsProjectControl({
   namespace: string
   project: string
 }) {
+  const isAdmin = useIsSuperUser()
   const queryClient = useQueryClient()
   const [modalOpen, setModalOpen] = useState(false)
 
@@ -25,11 +27,13 @@ export function AgentSettingsProjectControl({
     queryKey: ['pr-event-settings', namespace, project],
     queryFn: () => prEventSettingsGet(namespace, project),
     staleTime: 30_000,
+    enabled: isAdmin,
   })
   const { data: seedData } = useQuery({
     queryKey: ['seed-event-settings', namespace, project],
     queryFn: () => seedEventSettingsGet(namespace, project),
     staleTime: 30_000,
+    enabled: isAdmin,
   })
 
   const hasCustomSettings = prData?.project != null || seedData?.project != null
@@ -46,6 +50,8 @@ export function AgentSettingsProjectControl({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [modalOpen])
+
+  if (!isAdmin) return null
 
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: ['pr-event-settings', namespace, project] })
