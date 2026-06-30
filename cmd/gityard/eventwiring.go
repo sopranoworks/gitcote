@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/sopranoworks/gityard/internal/agent"
 	"github.com/sopranoworks/gityard/internal/git"
 	"github.com/sopranoworks/gityard/internal/integrity"
@@ -485,10 +486,7 @@ func autoMergePR(ec *eventContext, p *pr.PullRequest) error {
 	if err != nil {
 		return fmt.Errorf("resolve source: %w", err)
 	}
-	targetHash, err := git.ResolveBranch(repo, p.TargetBranch)
-	if err != nil {
-		return fmt.Errorf("resolve target: %w", err)
-	}
+	targetHash, _ := git.ResolveBranch(repo, p.TargetBranch)
 
 	mergeResult, err := git.ComputeMerge(repo, targetHash, sourceHash)
 	if err != nil {
@@ -510,13 +508,22 @@ func autoMergePR(ec *eventContext, p *pr.PullRequest) error {
 		return fmt.Errorf("merge conflicts detected")
 	}
 
-	msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
-	mergeHash, err := git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
-	if err != nil {
-		return fmt.Errorf("create merge commit: %w", err)
-	}
-	if err := git.UpdateBranchRef(repo, p.TargetBranch, mergeHash, targetHash); err != nil {
-		return fmt.Errorf("update target ref: %w", err)
+	var mergeHash plumbing.Hash
+	if targetHash == plumbing.ZeroHash {
+		mergeHash = sourceHash
+		if err := git.CreateBranchRef(repo, p.TargetBranch, sourceHash); err != nil {
+			return fmt.Errorf("create target ref: %w", err)
+		}
+	} else {
+		msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
+		var mergeErr error
+		mergeHash, mergeErr = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
+		if mergeErr != nil {
+			return fmt.Errorf("create merge commit: %w", mergeErr)
+		}
+		if err := git.UpdateBranchRef(repo, p.TargetBranch, mergeHash, targetHash); err != nil {
+			return fmt.Errorf("update target ref: %w", err)
+		}
 	}
 
 	recordHeadHash(ec.gitStore, p.RepoNamespace, p.RepoProject)

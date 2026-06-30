@@ -51,18 +51,33 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 	createPR := false
 	target := ""
 	title := ""
+	var orderFiles []string
+	var resultFiles []string
 	var sourceBranch string
 
-	for k, v := range opts {
-		switch k {
-		case "pull_request.create":
-			createPR = true
-		case "pull_request.target":
-			if v != "" {
-				target = v
+	if _, ok := opts["pull_request.create"]; ok {
+		createPR = true
+	}
+	if vals := opts["pull_request.target"]; len(vals) > 0 {
+		if v := vals[len(vals)-1]; v != "" {
+			target = v
+		}
+	}
+	if vals := opts["pull_request.title"]; len(vals) > 0 {
+		title = vals[len(vals)-1]
+	}
+	for _, v := range opts["pull_request.order_files"] {
+		for _, f := range strings.Split(v, ",") {
+			if f = strings.TrimSpace(f); f != "" {
+				orderFiles = append(orderFiles, f)
 			}
-		case "pull_request.title":
-			title = v
+		}
+	}
+	for _, v := range opts["pull_request.result_files"] {
+		for _, f := range strings.Split(v, ",") {
+			if f = strings.TrimSpace(f); f != "" {
+				resultFiles = append(resultFiles, f)
+			}
 		}
 	}
 
@@ -151,6 +166,12 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 	// Create new PR.
 	mergeable := computeMergeableForRepo(store, namespace, project, sourceBranch, target)
 	now := time.Now()
+	if orderFiles == nil {
+		orderFiles = []string{}
+	}
+	if resultFiles == nil {
+		resultFiles = []string{}
+	}
 	newPR := &pr.PullRequest{
 		RepoNamespace: namespace,
 		RepoProject:   project,
@@ -164,6 +185,8 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 		TargetCommit:  targetHash.String(),
 		CreatedAt:     now,
 		UpdatedAt:     now,
+		OrderFiles:    orderFiles,
+		ResultFiles:   resultFiles,
 	}
 	num, err := prStore.Create(newPR)
 	if err != nil {
@@ -238,14 +261,16 @@ func computeMergeableForRepo(store *git.Store, namespace, project, sourceBranch,
 	return pr.MergeableClean
 }
 
-// parsePushOpts converts a []string of "key=value" or bare "key" into a map.
-func parsePushOpts(opts []string) map[string]string {
-	m := make(map[string]string, len(opts))
+// parsePushOpts converts a []string of "key=value" or bare "key" into a multi-value map.
+// Multiple -o flags with the same key accumulate values.
+func parsePushOpts(opts []string) map[string][]string {
+	m := make(map[string][]string, len(opts))
 	for _, o := range opts {
 		if i := strings.IndexByte(o, '='); i >= 0 {
-			m[o[:i]] = o[i+1:]
+			key := o[:i]
+			m[key] = append(m[key], o[i+1:])
 		} else {
-			m[o] = ""
+			m[o] = append(m[o], "")
 		}
 	}
 	return m
@@ -774,6 +799,7 @@ const (
 	MsgPRList            uiws.MessageType = "PR_LIST"
 	MsgPRGet             uiws.MessageType = "PR_GET"
 	MsgPRMerge           uiws.MessageType = "PR_MERGE"
+	MsgPRClose           uiws.MessageType = "PR_CLOSE"
 	MsgPRRetryAgent      uiws.MessageType = "PR_RETRY_AGENT"
 	MsgPRDismissInterrupt uiws.MessageType = "PR_DISMISS_INTERRUPT"
 	MsgAgentList         uiws.MessageType = "AGENT_LIST"
@@ -784,6 +810,7 @@ var PRLevels = map[uiws.MessageType]uiws.Op{
 	MsgPRList:             {Level: authz.LevelRead, Global: false},
 	MsgPRGet:              {Level: authz.LevelRead, Global: false},
 	MsgPRMerge:            {Level: authz.LevelAdmin, Global: false},
+	MsgPRClose:            {Level: authz.LevelAdmin, Global: false},
 	MsgPRRetryAgent:       {Level: authz.LevelAdmin, Global: false},
 	MsgPRDismissInterrupt: {Level: authz.LevelAdmin, Global: false},
 	MsgAgentList:          {Level: authz.LevelRead, Global: true},
@@ -799,6 +826,8 @@ func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType u
 		handlePRGet(c, gitStore, payload)
 	case MsgPRMerge:
 		handlePRMerge(c, gitStore, ec, payload)
+	case MsgPRClose:
+		handlePRClose(c, gitStore, payload)
 	case MsgPRRetryAgent:
 		handlePRRetryAgent(c, gitStore, ec, payload)
 	case MsgPRDismissInterrupt:
@@ -1066,6 +1095,42 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 		"state":                 string(pullReq.State),
 		"merge_commit":          mergeHash.String(),
 		"source_branch_deleted": sourceBranchDeleted,
+	})
+}
+
+// --- PR_CLOSE ---
+
+func handlePRClose(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
+	var p prMergePayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	pullReq, err := prStore.Get(p.Number)
+	if err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	if pullReq.State == pr.StateMerged || pullReq.State == pr.StateClosed {
+		c.SendError(fmt.Sprintf("PR #%d is already %s", p.Number, pullReq.State))
+		return
+	}
+	now := time.Now()
+	pullReq.State = pr.StateClosed
+	pullReq.ClosedAt = &now
+	pullReq.UpdatedAt = now
+	if err := prStore.Update(pullReq); err != nil {
+		c.SendError(err.Error())
+		return
+	}
+	c.SendResponse(MsgPRClose, map[string]interface{}{
+		"number": pullReq.Number,
+		"state":  string(pullReq.State),
 	})
 }
 
