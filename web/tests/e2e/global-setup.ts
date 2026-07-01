@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync, openSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, openSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,7 +28,17 @@ let dataDir = ''
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
   const binPath = join(tmpdir(), 'gityard-e2e-bin')
+  const mockReviewerBin = join(tmpdir(), 'gityard-e2e-mock-reviewer')
+  const mockRejectorBin = join(tmpdir(), 'gityard-e2e-mock-rejector')
   execFileSync('go', ['build', '-o', binPath, './cmd/gityard'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  })
+  execFileSync('go', ['build', '-o', mockReviewerBin, './cmd/mock-reviewer'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  })
+  execFileSync('go', ['build', '-o', mockRejectorBin, './cmd/mock-rejector'], {
     cwd: repoRoot,
     stdio: 'inherit',
   })
@@ -36,6 +46,33 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   dataDir = mkdtempSync(join(tmpdir(), 'gityard-e2e-data-'))
   const cfgPath = join(dataDir, 'gityard.yaml')
   const oauthPort = PORT - 2
+
+  const agentsDir = join(dataDir, 'agents')
+  mkdirSync(join(agentsDir, 'mock_reviewer'), { recursive: true })
+  mkdirSync(join(agentsDir, 'mock_rejector'), { recursive: true })
+  writeFileSync(
+    join(agentsDir, 'mock_reviewer/agent.yaml'),
+    [
+      'agent:',
+      '  role: reviewer',
+      '  display_name: "Mock Reviewer (E2E)"',
+      `  command: '${mockReviewerBin}'`,
+      '  prompt: "Review and approve PR $PR_ID"',
+      '',
+    ].join('\n'),
+  )
+  writeFileSync(
+    join(agentsDir, 'mock_rejector/agent.yaml'),
+    [
+      'agent:',
+      '  role: reviewer',
+      '  display_name: "Mock Rejector (E2E)"',
+      `  command: '${mockRejectorBin}'`,
+      '  prompt: "Review and reject PR $PR_ID"',
+      '',
+    ].join('\n'),
+  )
+
   writeFileSync(
     cfgPath,
     [
@@ -60,6 +97,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       '    email: "admin@test.local"',
       'storage:',
       `  base_dir: "${join(dataDir, 'data')}"`,
+      'agent_spawn:',
+      '  enabled: true',
+      `  agents_root: "${agentsDir}"`,
+      '  default_timeout: "2m"',
       '',
     ].join('\n'),
   )

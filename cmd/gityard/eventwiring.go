@@ -255,6 +255,9 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 			if role == "merger" {
 				reattemptMerge(ec, p, ac.DirName, role)
 			}
+			if role == "reviewer" && !resolveAutoConfirm(ec, p.RepoNamespace, p.RepoProject) {
+				return
+			}
 			releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 			return
 		}
@@ -545,6 +548,22 @@ func releasePRSlotAndDequeue(ec *eventContext, ns, proj string, prNumber int) {
 	}
 	ec.logger.Info("PR dequeued, spawning reviewer", "pr", nextPR, "namespace", ns, "project", proj)
 	go onPRCreated(ec, p)
+}
+
+func resolveAutoConfirm(ec *eventContext, ns, proj string) bool {
+	if ec.integrityHS == nil {
+		return false
+	}
+	global, _ := ec.integrityHS.GetGlobalPREventSettings()
+	project, _ := ec.integrityHS.GetProjectPREventSettings(ns, proj)
+	var globalAction, projectAction *integrity.ConfirmAction
+	if global != nil {
+		globalAction = global.OnConfirmed
+	}
+	if project != nil {
+		projectAction = project.OnConfirmed
+	}
+	return integrity.ResolveConfirmAction(projectAction, globalAction).AutoConfirm
 }
 
 // --- PR Event Hooks ---
