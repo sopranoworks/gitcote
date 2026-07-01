@@ -134,7 +134,7 @@ test.describe('PR rejection reason', () => {
     await expect(dialog).not.toBeVisible({ timeout: 5000 })
     await page.waitForTimeout(1000)
 
-    await expect(content.getByText('rejected')).toBeVisible({ timeout: 5000 })
+    await expect(content.getByText('Changes Requested')).toBeVisible({ timeout: 5000 })
     await expect(content.getByText(reasonText)).toBeVisible({ timeout: 5000 })
 
     await page.screenshot({ path: 'test-results/pr-rejected-with-reason.png', fullPage: false })
