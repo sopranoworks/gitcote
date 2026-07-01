@@ -1353,8 +1353,8 @@ func operatorRejectPR(gitStore *git.Store, ec *eventContext, ns, proj string, pr
 	if err != nil {
 		return nil, err
 	}
-	if pullReq.State != pr.StateApproved {
-		return nil, fmt.Errorf("PR #%d is in state %q, not approved (can only reject approved PRs)", prNumber, pullReq.State)
+	if pullReq.State != pr.StateOpen && pullReq.State != pr.StateApproved {
+		return nil, fmt.Errorf("PR #%d is in state %q (can only reject open or approved PRs)", prNumber, pullReq.State)
 	}
 
 	pullReq.State = pr.StateRejected

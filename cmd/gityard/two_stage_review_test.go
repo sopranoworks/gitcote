@@ -136,27 +136,33 @@ func TestOperatorReject(t *testing.T) {
 	t.Log("PASS: operator reject → rejected state, queue slot released, next PR dequeued")
 }
 
-func TestOperatorReject_OnlyFromApproved(t *testing.T) {
+func TestOperatorReject_FromOpenAndApproved(t *testing.T) {
 	ns, proj := "default", "oprejectonly"
 	gitStore, _, prStore, ec := setup2StageTest(t, ns, proj)
 
+	// Reject from open state → should succeed
 	create2StagePR(t, prStore, ns, proj, 1, "feat-1")
+	rejected, err := operatorRejectPR(gitStore, ec, ns, proj, 1, "not needed")
+	if err != nil {
+		t.Fatalf("reject from open: unexpected error: %v", err)
+	}
+	if rejected.State != pr.StateRejected {
+		t.Fatalf("PR #1 state = %q, want rejected", rejected.State)
+	}
+	t.Log("PASS: operator reject from open succeeds")
 
-	// Try to operator-reject an open PR → should fail
-	_, err := operatorRejectPR(gitStore, ec, ns, proj, 1, "test")
+	// Reject from merged state → should fail
+	create2StagePR(t, prStore, ns, proj, 2, "feat-2")
+	p2, _ := prStore.Get(2)
+	p2.State = pr.StateMerged
+	if err := prStore.Update(p2); err != nil {
+		t.Fatal(err)
+	}
+	_, err = operatorRejectPR(gitStore, ec, ns, proj, 2, "test")
 	if err == nil {
-		t.Fatal("expected error when rejecting non-approved PR")
+		t.Fatal("expected error when rejecting merged PR")
 	}
-	if !strings.Contains(err.Error(), "not approved") {
-		t.Fatalf("error = %q, want 'not approved' message", err.Error())
-	}
-
-	// Verify PR state unchanged
-	p, _ := prStore.Get(1)
-	if p.State != pr.StateOpen {
-		t.Fatalf("PR #1 state = %q, want open (unchanged)", p.State)
-	}
-	t.Log("PASS: operator reject on open PR correctly returns error")
+	t.Log("PASS: operator reject from merged correctly returns error")
 }
 
 func TestOperatorConfirmMerge(t *testing.T) {

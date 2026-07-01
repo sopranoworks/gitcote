@@ -290,14 +290,6 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
               </button>
             )}
             <button
-              className={styles.confirmBtn}
-              disabled={!mergeable || merging}
-              onClick={() => void handleMerge()}
-              title={!mergeable ? 'Resolve conflicts first' : undefined}
-            >
-              {merging ? 'Merging…' : 'Confirm'}
-            </button>
-            <button
               className={styles.rejectBtn}
               disabled={rejecting}
               onClick={() => void handleOperatorReject()}
