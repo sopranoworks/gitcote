@@ -80,12 +80,8 @@ func CheckBranchProtection(
 				return fmt.Errorf("protected branch %q requires write access; use PR workflow", branch)
 			}
 
-			if u.OldHash != plumbing.ZeroHash {
-				ff, err := isFastForward(repo, u.OldHash, u.NewHash)
-				if err != nil || !ff {
-					return fmt.Errorf("force push denied on protected branch %q", branch)
-				}
-			}
+			// Fast-forward check is handled by ProtectedStorer at SetReference
+			// time, when incoming objects are available in the store.
 		}
 
 		if len(allowedBranches) > 0 {
@@ -106,18 +102,6 @@ func MatchesAllowedBranches(branch string, allowedBranches []string) bool {
 		}
 	}
 	return false
-}
-
-func isFastForward(repo *gogit.Repository, oldHash, newHash plumbing.Hash) (bool, error) {
-	oldCommit, err := repo.CommitObject(oldHash)
-	if err != nil {
-		return false, err
-	}
-	newCommit, err := repo.CommitObject(newHash)
-	if err != nil {
-		return false, err
-	}
-	return oldCommit.IsAncestor(newCommit)
 }
 
 // AllowedBranchesFromExtra extracts the allowed_branches list from a

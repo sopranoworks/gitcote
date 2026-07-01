@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/go-git/go-git/v6/storage"
 	"github.com/sopranoworks/gityard/internal/git"
 	"github.com/sopranoworks/gityard/internal/integrity"
 	"github.com/sopranoworks/gityard/internal/sshd"
@@ -236,6 +237,20 @@ func run(cfg *Config, logger *slog.Logger) error {
 	gitHTTP := git.NewHandler(gitStore, logger)
 	gitHTTP.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
 		return checkBranchProtection(gitStore, namespace, project, principal, refUpdates)
+	}
+	gitHTTP.ProtectStorer = func(namespace, project string, principal auth.Principal, st storage.Storer) storage.Storer {
+		repo, err := gitStore.OpenRepo(namespace, project)
+		if err != nil {
+			return st
+		}
+		effectiveLevel := git.EffectiveGitLevel(principal.Scope, namespace, project)
+		allowedBranches := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
+		return &git.ProtectedStorer{
+			Storer:  st,
+			Repo:    repo,
+			Level:   effectiveLevel,
+			Allowed: allowedBranches,
+		}
 	}
 	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
 		logger.Info("post-receive",

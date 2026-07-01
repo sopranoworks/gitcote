@@ -37,6 +37,12 @@ type Handler struct {
 	// the namespace, project, principal, and any push options extracted from the
 	// protocol stream (e.g. "pull_request.create", "pull_request.target=main").
 	PostReceive func(namespace, project string, principal auth.Principal, pushOpts []string)
+
+	// ProtectStorer wraps a storer with branch protection for receive-pack.
+	// Called after PreReceive passes but before go-git processes the packfile.
+	// The wrapper's SetReference intercept runs after objects are written,
+	// enabling fast-forward checks that need access to incoming commit objects.
+	ProtectStorer func(namespace, project string, principal auth.Principal, st storage.Storer) storage.Storer
 }
 
 // NewHandler returns a handler serving Git Smart HTTP for repos in store.
@@ -137,7 +143,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r2 = r2.WithContext(context.WithValue(r2.Context(), pushOptionKey{}, pushOpts))
 	}
 
-	h.backend.ServeHTTP(w, r2)
+	if isReceivePack && h.ProtectStorer != nil {
+		principal, _ := auth.PrincipalFrom(r.Context())
+		protLoader := &protectingLoader{
+			base:      &storeLoader{store: h.store},
+			namespace: namespace,
+			project:   project,
+			principal: principal,
+			protect:   h.ProtectStorer,
+		}
+		protBackend := &backend.Backend{
+			Loader:   protLoader,
+			ErrorLog: log.New(slogWriter{h.logger}, "", 0),
+		}
+		protBackend.ServeHTTP(w, r2)
+	} else {
+		h.backend.ServeHTTP(w, r2)
+	}
 
 	// Post-receive hook: fire after a receive-pack POST completes.
 	if isReceivePack && h.PostReceive != nil {
@@ -259,4 +281,22 @@ type slogWriter struct {
 func (w slogWriter) Write(p []byte) (int, error) {
 	w.logger.Warn(strings.TrimSpace(string(p)), "source", "git-backend")
 	return len(p), nil
+}
+
+// protectingLoader wraps a transport.Loader, applying storer protection
+// for receive-pack requests.
+type protectingLoader struct {
+	base      transport.Loader
+	namespace string
+	project   string
+	principal auth.Principal
+	protect   func(namespace, project string, principal auth.Principal, st storage.Storer) storage.Storer
+}
+
+func (l *protectingLoader) Load(u *url.URL) (storage.Storer, error) {
+	st, err := l.base.Load(u)
+	if err != nil {
+		return nil, err
+	}
+	return l.protect(l.namespace, l.project, l.principal, st), nil
 }

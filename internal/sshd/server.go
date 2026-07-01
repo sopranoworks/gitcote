@@ -17,8 +17,6 @@ import (
 	"sync"
 
 	"github.com/go-git/go-billy/v6/osfs"
-	gogit "github.com/go-git/go-git/v6"
-	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/cache"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/go-git/go-git/v6/storage"
@@ -28,7 +26,6 @@ import (
 	"github.com/sopranoworks/gityard/internal/git"
 	"github.com/sopranoworks/gityard/internal/sshkeys"
 	"github.com/sopranoworks/shoka/pkg/auth"
-	"github.com/sopranoworks/shoka/pkg/authz"
 )
 
 type Server struct {
@@ -238,11 +235,11 @@ func (s *Server) handleReceivePack(ctx context.Context, ch gossh.Channel, st *fi
 		}
 		effectiveLevel := git.EffectiveGitLevel(principal.Scope, namespace, project)
 		allowedBranches := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
-		protSt = &protectedStorer{
+		protSt = &git.ProtectedStorer{
 			Storer:  st,
-			repo:    repo,
-			level:   effectiveLevel,
-			allowed: allowedBranches,
+			Repo:    repo,
+			Level:   effectiveLevel,
+			Allowed: allowedBranches,
 		}
 	}
 
@@ -258,68 +255,6 @@ func (s *Server) handleReceivePack(ctx context.Context, ch gossh.Channel, st *fi
 	return 0
 }
 
-// protectedStorer wraps a storage.Storer with branch protection checks.
-// go-git's ReceivePack calls SetReference/CheckAndSetReference/RemoveReference
-// when applying ref updates; this wrapper intercepts those calls.
-type protectedStorer struct {
-	storage.Storer
-	repo    *gogit.Repository
-	level   authz.Level
-	allowed []string
-}
-
-func (s *protectedStorer) SetReference(ref *plumbing.Reference) error {
-	oldHash := plumbing.ZeroHash
-	if existing, err := s.Storer.Reference(ref.Name()); err == nil {
-		oldHash = existing.Hash()
-	}
-	if err := s.checkRef(ref.Name(), oldHash, ref.Hash()); err != nil {
-		return err
-	}
-	return s.Storer.SetReference(ref)
-}
-
-func (s *protectedStorer) RemoveReference(name plumbing.ReferenceName) error {
-	if name.IsBranch() && git.IsDefaultBranch(s.repo, name.Short()) {
-		return fmt.Errorf("cannot delete protected branch %q", name.Short())
-	}
-	return s.Storer.RemoveReference(name)
-}
-
-func (s *protectedStorer) checkRef(name plumbing.ReferenceName, oldHash, newHash plumbing.Hash) error {
-	if !name.IsBranch() {
-		return nil
-	}
-	branch := name.Short()
-
-	if git.IsDefaultBranch(s.repo, branch) {
-		if newHash == plumbing.ZeroHash {
-			return fmt.Errorf("cannot delete protected branch %q", branch)
-		}
-		if s.level < authz.LevelWrite {
-			return fmt.Errorf("protected branch %q requires write access; use PR workflow", branch)
-		}
-		if oldHash != plumbing.ZeroHash {
-			oldCommit, cerr := s.repo.CommitObject(oldHash)
-			if cerr != nil {
-				return fmt.Errorf("force push denied on protected branch %q", branch)
-			}
-			newCommit, cerr := s.repo.CommitObject(newHash)
-			if cerr != nil {
-				return fmt.Errorf("force push denied on protected branch %q", branch)
-			}
-			isFF, cerr := oldCommit.IsAncestor(newCommit)
-			if cerr != nil || !isFF {
-				return fmt.Errorf("force push denied on protected branch %q", branch)
-			}
-		}
-	}
-
-	if len(s.allowed) > 0 && !git.MatchesAllowedBranches(branch, s.allowed) {
-		return fmt.Errorf("token restricted to branches: %v", s.allowed)
-	}
-	return nil
-}
 
 // readCloserWrapper wraps io.Reader with a no-op Close. The channel lifecycle
 // is managed by the session handler, not by go-git's ReceivePack.
