@@ -159,6 +159,7 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
   const [merging, setMerging] = useState(false)
   const [rejecting, setRejecting] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
+  const [rejectModalOpen, setRejectModalOpen] = useState(false)
   const [closing, setClosing] = useState(false)
   const [reviewing, setReviewing] = useState(false)
 
@@ -227,6 +228,7 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
     try {
       await prOperatorReject(namespace, project, number, rejectReason || undefined)
       setRejectReason('')
+      setRejectModalOpen(false)
       handleRefresh()
     } finally {
       setRejecting(false)
@@ -291,10 +293,9 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
             )}
             <button
               className={styles.rejectBtn}
-              disabled={rejecting}
-              onClick={() => void handleOperatorReject()}
+              onClick={() => setRejectModalOpen(true)}
             >
-              {rejecting ? 'Rejecting…' : 'Reject'}
+              Reject
             </button>
           </div>
         </div>
@@ -311,22 +312,12 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
             >
               {merging ? 'Merging…' : 'Confirm'}
             </button>
-            <div className={styles.rejectRow}>
-              <input
-                type="text"
-                placeholder="Rejection reason (optional)"
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                className={styles.rejectInput}
-              />
-              <button
-                className={styles.rejectBtn}
-                disabled={rejecting}
-                onClick={() => void handleOperatorReject()}
-              >
-                {rejecting ? 'Rejecting…' : 'Reject'}
-              </button>
-            </div>
+            <button
+              className={styles.rejectBtn}
+              onClick={() => setRejectModalOpen(true)}
+            >
+              Reject
+            </button>
           </div>
         </div>
       )}
@@ -368,6 +359,46 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
             info={pr.interrupt_info}
             onRefresh={handleRefresh}
           />
+        </div>
+      )}
+
+      {rejectModalOpen && (
+        <div className={styles.rejectOverlay} onClick={() => { setRejectModalOpen(false); setRejectReason('') }}>
+          <div
+            className={styles.rejectDialog}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Reject PR #${pr.number}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className={styles.rejectDialogTitle}>Reject PR #{pr.number}</h2>
+            <label className={styles.rejectDialogLabel}>
+              Reason (optional)
+              <textarea
+                className={styles.rejectDialogTextarea}
+                rows={3}
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="Why is this PR being rejected?"
+                autoFocus
+              />
+            </label>
+            <div className={styles.rejectDialogActions}>
+              <button
+                className={styles.rejectDialogCancel}
+                onClick={() => { setRejectModalOpen(false); setRejectReason('') }}
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.rejectDialogConfirm}
+                disabled={rejecting}
+                onClick={() => void handleOperatorReject()}
+              >
+                {rejecting ? 'Rejecting…' : 'Reject'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -280,3 +280,101 @@
   color: var(--c-text-dim);
   margin-bottom: 0.75rem;
 }
+
+.rejectOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay, 1000);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #00000066;
+  padding: var(--sp-4, 16px);
+  animation: shoka-fade-in var(--dur-fast, 150ms) ease;
+}
+
+.rejectDialog {
+  width: 100%;
+  max-width: 420px;
+  background: var(--c-bg-elev, #1e1e1e);
+  border: 1px solid var(--c-border-strong, #555);
+  border-radius: var(--radius-lg, 8px);
+  box-shadow: var(--shadow-overlay, 0 8px 32px #0006);
+  padding: var(--sp-5, 20px);
+  animation: shoka-pop-in-center var(--dur-fast, 150ms) var(--ease-out, ease-out);
+}
+
+.rejectDialogTitle {
+  margin: 0 0 var(--sp-4, 16px);
+  font-size: var(--fs-lg, 1rem);
+  font-weight: 600;
+  color: var(--c-text, #e0e0e0);
+}
+
+.rejectDialogLabel {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--c-text-dim, #a4abb8);
+  margin-bottom: var(--sp-4, 16px);
+}
+
+.rejectDialogTextarea {
+  display: block;
+  width: 100%;
+  margin-top: var(--sp-2, 8px);
+  padding: 8px 10px;
+  background: var(--c-bg-inset, #1a1a1a);
+  border: 1px solid var(--c-border-strong, #555);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--c-text, #e0e0e0);
+  font-size: 0.85rem;
+  font-family: inherit;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.rejectDialogTextarea:focus {
+  outline: none;
+  border-color: var(--c-accent, #58a6ff);
+}
+
+.rejectDialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2, 8px);
+}
+
+.rejectDialogCancel {
+  background: transparent;
+  color: var(--c-text-dim, #a4abb8);
+  border: 1px solid var(--c-border-strong, #555);
+  padding: 5px 14px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--fs-sm, 0.82rem);
+  cursor: pointer;
+}
+
+.rejectDialogCancel:hover {
+  background: var(--c-hover, #ffffff10);
+  color: var(--c-text, #e0e0e0);
+}
+
+.rejectDialogConfirm {
+  background: var(--c-bad, #f85149);
+  color: #fff;
+  border: 1px solid var(--c-bad, #f85149);
+  padding: 5px 14px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--fs-sm, 0.82rem);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rejectDialogConfirm:hover {
+  filter: brightness(1.08);
+}
+
+.rejectDialogConfirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -182,6 +182,22 @@ test.describe('PR action buttons', () => {
     await page.screenshot({ path: 'test-results/pr-buttons-open.png', fullPage: false })
   })
 
+  test('reject modal opens from Reject button', async ({ page }) => {
+    await page.goto(`/p/${ns}/${proj}/prs?pr=1`)
+    await page.waitForTimeout(1500)
+    const content = page.locator('#content')
+    await expect(content.getByRole('button', { name: 'Reject' })).toBeVisible({ timeout: 5000 })
+    await content.getByRole('button', { name: 'Reject' }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible({ timeout: 3000 })
+    await expect(dialog.getByText('Reason (optional)')).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Reject' })).toBeVisible()
+    await page.screenshot({ path: 'test-results/pr-reject-modal.png', fullPage: false })
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(dialog).not.toBeVisible({ timeout: 3000 })
+  })
+
   test('approved PR shows Confirm + Reject', async ({ page }) => {
     await mcpApprove(token, ns, proj, 1)
     await page.goto(`/p/${ns}/${proj}/prs?pr=1`)
