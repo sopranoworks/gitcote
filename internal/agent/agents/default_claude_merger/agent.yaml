@@ -5,9 +5,12 @@ agent:
   prompt: |
     Resolve merge conflicts for PR $PR_ID ($SOURCE_BRANCH → $TARGET_BRANCH).
 
+    Git clone URL: $GIT_URL
     Conflicting files: $CONFLICT_FILES
-    Temp clone directory: $TEMP_CLONE_DIR
 
-    1. Inspect the conflicting files
-    2. Resolve each conflict preserving intent from both sides
-    3. Stage resolved files, commit, and push
+    Steps:
+    1. Clone the repository: git clone $GIT_URL repo && cd repo
+    2. Checkout the feature branch: git checkout $SOURCE_BRANCH
+    3. Merge the target branch: git merge origin/$TARGET_BRANCH
+    4. Resolve conflicts in the listed files, preserving intent from both sides
+    5. Stage resolved files, commit, and push: git add . && git commit -m "Resolve merge conflicts" && git push

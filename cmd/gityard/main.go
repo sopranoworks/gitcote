@@ -227,6 +227,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 		oauthStore:  oauthStore,
 		agentCfg:    cfg.AgentSpawn,
 		gityardURL:  agentMCPURL,
+		httpURL:     gityardURL,
 		seedCtx:     seedCtx,
 		logger:      logger,
 	}

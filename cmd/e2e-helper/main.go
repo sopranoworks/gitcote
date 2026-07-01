@@ -1,12 +1,15 @@
-// Command e2e-helper performs setup and verification for the E2E full-flow test.
+// Command e2e-helper performs setup and verification for E2E tests.
 //
 // Usage:
 //
 //	e2e-helper --setup --base-dir=<dir> --ns=<ns> --proj=<proj> --agent-name=<name>
+//	e2e-helper --setup --base-dir=<dir> --ns=<ns> --proj=<proj> --agent-name=<name> --auto-confirm=false --merger-agent=<name>
 //	e2e-helper --check --base-dir=<dir> --ns=<ns> --proj=<proj>
+//	e2e-helper --check --base-dir=<dir> --ns=<ns> --proj=<proj> --expect-state=interrupted
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -19,11 +22,14 @@ import (
 
 func main() {
 	setup := flag.Bool("setup", false, "run setup: create repo + set agent settings")
-	check := flag.Bool("check", false, "run check: verify PR merged")
+	check := flag.Bool("check", false, "run check: verify PR state")
 	baseDir := flag.String("base-dir", "", "storage base directory")
 	ns := flag.String("ns", "e2e", "namespace")
 	proj := flag.String("proj", "fullflow", "project name")
 	agentName := flag.String("agent-name", "mock_reviewer", "agent config name for reviewer")
+	autoConfirm := flag.Bool("auto-confirm", true, "enable auto-confirm on approval")
+	mergerAgent := flag.String("merger-agent", "", "agent config name for merge conflict resolution")
+	expectState := flag.String("expect-state", "merged", "expected PR state for --check")
 	flag.Parse()
 
 	if *baseDir == "" {
@@ -32,12 +38,12 @@ func main() {
 	}
 
 	if *setup {
-		if err := runSetup(*baseDir, *ns, *proj, *agentName); err != nil {
+		if err := runSetup(*baseDir, *ns, *proj, *agentName, *autoConfirm, *mergerAgent); err != nil {
 			fmt.Fprintf(os.Stderr, "e2e-helper setup: %v\n", err)
 			os.Exit(1)
 		}
 	} else if *check {
-		if err := runCheck(*baseDir, *ns, *proj); err != nil {
+		if err := runCheck(*baseDir, *ns, *proj, *expectState); err != nil {
 			fmt.Fprintf(os.Stderr, "e2e-helper check: %v\n", err)
 			os.Exit(1)
 		}
@@ -47,7 +53,7 @@ func main() {
 	}
 }
 
-func runSetup(baseDir, ns, proj, agentName string) error {
+func runSetup(baseDir, ns, proj, agentName string, autoConfirm bool, mergerAgent string) error {
 	gitStore := git.NewStore(baseDir)
 	if err := gitStore.CreateRepo(ns, proj); err != nil {
 		return fmt.Errorf("create repo: %w", err)
@@ -61,8 +67,7 @@ func runSetup(baseDir, ns, proj, agentName string) error {
 	defer intStore.Close()
 
 	agentEnabled := true
-	autoConfirm := true
-	if err := intStore.SetGlobalPREventSettings(&integrity.PREventSettings{
+	settings := &integrity.PREventSettings{
 		OnCreated: &integrity.EventAction{
 			AgentEnabled: &agentEnabled,
 			AgentName:    agentName,
@@ -70,10 +75,19 @@ func runSetup(baseDir, ns, proj, agentName string) error {
 		OnConfirmed: &integrity.ConfirmAction{
 			AutoConfirm: &autoConfirm,
 		},
-	}); err != nil {
+	}
+
+	if mergerAgent != "" {
+		settings.OnMergeConflict = &integrity.EventAction{
+			AgentEnabled: &agentEnabled,
+			AgentName:    mergerAgent,
+		}
+	}
+
+	if err := intStore.SetGlobalPREventSettings(settings); err != nil {
 		return fmt.Errorf("set PR event settings: %w", err)
 	}
-	fmt.Printf("setup: PR event settings configured (agent=%s, auto_confirm=true)\n", agentName)
+	fmt.Printf("setup: PR event settings configured (reviewer=%s, auto_confirm=%v, merger=%s)\n", agentName, autoConfirm, mergerAgent)
 
 	oauthSt, err := oauthstore.Open(baseDir + "/oauth.db")
 	if err != nil {
@@ -85,7 +99,7 @@ func runSetup(baseDir, ns, proj, agentName string) error {
 	return nil
 }
 
-func runCheck(baseDir, ns, proj string) error {
+func runCheck(baseDir, ns, proj, expectState string) error {
 	prStore, err := pr.Open(fmt.Sprintf("%s/%s/%s/prs.db", baseDir, ns, proj))
 	if err != nil {
 		return fmt.Errorf("open PR store: %w", err)
@@ -107,16 +121,32 @@ func runCheck(baseDir, ns, proj string) error {
 		if p.MergeCommit != "" {
 			fmt.Printf("check: PR #%d merge_commit=%s\n", p.Number, p.MergeCommit)
 		}
+		if p.InterruptInfo != nil {
+			info, _ := json.Marshal(p.InterruptInfo)
+			fmt.Printf("check: PR #%d interrupt_info=%s\n", p.Number, string(info))
+		}
 	}
 
 	thePR := prs[0]
-	if thePR.State != pr.StateMerged {
-		return fmt.Errorf("PR #%d state=%q, want merged", thePR.Number, thePR.State)
-	}
-	if thePR.MergeCommit == "" {
-		return fmt.Errorf("PR #%d merge_commit is empty", thePR.Number)
+	expected := pr.PRState(expectState)
+	if thePR.State != expected {
+		return fmt.Errorf("PR #%d state=%q, want %s", thePR.Number, thePR.State, expectState)
 	}
 
-	fmt.Printf("check: PASS — PR #%d merged (commit=%s)\n", thePR.Number, thePR.MergeCommit[:8])
+	switch expected {
+	case pr.StateMerged:
+		if thePR.MergeCommit == "" {
+			return fmt.Errorf("PR #%d merge_commit is empty", thePR.Number)
+		}
+		fmt.Printf("check: PASS — PR #%d merged (commit=%s)\n", thePR.Number, thePR.MergeCommit[:8])
+	case pr.StateInterrupted:
+		if thePR.InterruptInfo == nil {
+			return fmt.Errorf("PR #%d interrupt_info is nil", thePR.Number)
+		}
+		fmt.Printf("check: PASS — PR #%d interrupted (reason=%s, agent=%s)\n",
+			thePR.Number, thePR.InterruptInfo.Reason, thePR.InterruptInfo.AgentName)
+	default:
+		fmt.Printf("check: PASS — PR #%d state=%s\n", thePR.Number, thePR.State)
+	}
 	return nil
 }
