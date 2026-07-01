@@ -575,6 +575,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		}
 		p.State = pr.StateRejected
 		p.UpdatedAt = time.Now()
+		p.RejectionReason = in.Reason
 		if len(in.ReviewFiles) > 0 {
 			p.ReviewFiles = in.ReviewFiles
 		}
@@ -1359,6 +1360,7 @@ func operatorRejectPR(gitStore *git.Store, ec *eventContext, ns, proj string, pr
 
 	pullReq.State = pr.StateRejected
 	pullReq.UpdatedAt = time.Now()
+	pullReq.RejectionReason = reason
 	if err := prStore.Update(pullReq); err != nil {
 		return nil, err
 	}

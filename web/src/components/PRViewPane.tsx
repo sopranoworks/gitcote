@@ -330,6 +330,9 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
 
       {pr.state === 'rejected' && (
         <div className={styles.section}>
+          {pr.rejection_reason && (
+            <div className={styles.rejectionReason}>{pr.rejection_reason}</div>
+          )}
           <div style={{ marginTop: '0.75rem' }}>
             <button className={styles.actionBtn} disabled={closing} onClick={() => void handleClose()}>
               {closing ? 'Closing…' : 'Close'}

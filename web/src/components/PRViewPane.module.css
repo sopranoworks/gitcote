@@ -281,6 +281,17 @@
   margin-bottom: 0.75rem;
 }
 
+.rejectionReason {
+  padding: 0.6rem 0.75rem;
+  background: rgba(248, 81, 73, 0.08);
+  border: 1px solid rgba(248, 81, 73, 0.2);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--c-text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .rejectOverlay {
   position: fixed;
   inset: 0;

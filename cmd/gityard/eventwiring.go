@@ -287,15 +287,16 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 
 func executeAgentForPR(ec *eventContext, ac *agent.AgentConfig, p *pr.PullRequest, role string) *agent.SpawnResult {
 	spawnCtx := &agent.SpawnContext{
-		PRId:         fmt.Sprintf("%s/%s#%d", p.RepoNamespace, p.RepoProject, p.Number),
-		PRNumber:     int(p.Number),
-		Namespace:    p.RepoNamespace,
-		Project:      p.RepoProject,
-		SourceBranch: p.SourceBranch,
-		TargetBranch: p.TargetBranch,
-		OrderFiles:   strings.Join(p.OrderFiles, ","),
-		ResultFiles:  strings.Join(p.ResultFiles, ","),
-		ReviewFiles:  strings.Join(p.ReviewFiles, ","),
+		PRId:            fmt.Sprintf("%s/%s#%d", p.RepoNamespace, p.RepoProject, p.Number),
+		PRNumber:        int(p.Number),
+		Namespace:       p.RepoNamespace,
+		Project:         p.RepoProject,
+		SourceBranch:    p.SourceBranch,
+		TargetBranch:    p.TargetBranch,
+		OrderFiles:      strings.Join(p.OrderFiles, ","),
+		ResultFiles:     strings.Join(p.ResultFiles, ","),
+		ReviewFiles:     strings.Join(p.ReviewFiles, ","),
+		RejectionReason: p.RejectionReason,
 	}
 
 	if role == "merger" {

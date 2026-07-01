@@ -22,6 +22,7 @@ export interface PullRequest {
   approved_by?: string
   approved_at?: string
   source_branch_deleted?: boolean
+  rejection_reason?: string
   interrupt_info?: InterruptInfo
   order_files?: string[]
   result_files?: string[]

@@ -331,6 +331,9 @@ export function PRDetailView({
       {pr.state === 'rejected' && (
         <div className={styles.section}>
           <div style={{ color: '#f85149', fontWeight: 600 }}>Rejected by operator</div>
+          {pr.rejection_reason && (
+            <div style={{ padding: '0.6rem 0.75rem', background: 'rgba(248, 81, 73, 0.08)', border: '1px solid rgba(248, 81, 73, 0.2)', borderRadius: '6px', fontSize: '0.85rem', lineHeight: '1.5', whiteSpace: 'pre-wrap', marginTop: '0.5rem' }}>{pr.rejection_reason}</div>
+          )}
           <FileRefs label="Review files:" files={pr.review_files} />
           <FileRefs label="Order files:" files={pr.order_files} />
           <FileRefs label="Result files:" files={pr.result_files} />

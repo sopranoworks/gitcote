@@ -16,21 +16,22 @@ import (
 )
 
 type SpawnContext struct {
-	PRId          string
-	PRNumber      int
-	Namespace     string
-	Project       string
-	SourceBranch  string
-	TargetBranch  string
-	Directive     string
-	Report        string
-	TempCloneDir  string
-	ConflictFiles string
-	GitURL        string
-	OrderFiles    string
-	ResultFiles   string
-	ReviewFiles   string
-	Token         string
+	PRId            string
+	PRNumber        int
+	Namespace       string
+	Project         string
+	SourceBranch    string
+	TargetBranch    string
+	Directive       string
+	Report          string
+	TempCloneDir    string
+	ConflictFiles   string
+	GitURL          string
+	OrderFiles      string
+	ResultFiles     string
+	ReviewFiles     string
+	RejectionReason string
+	Token           string
 }
 
 type SpawnResult struct {
@@ -207,8 +208,9 @@ func buildVarMap(ctx *SpawnContext, workDir string) map[string]string {
 		"$GIT_URL":         ctx.GitURL,
 		"$ORDER_FILES":     ctx.OrderFiles,
 		"$RESULT_FILES":    ctx.ResultFiles,
-		"$REVIEW_FILES":    ctx.ReviewFiles,
-		"$TOKEN":           ctx.Token,
+		"$REVIEW_FILES":      ctx.ReviewFiles,
+		"$REJECTION_REASON": ctx.RejectionReason,
+		"$TOKEN":             ctx.Token,
 		"$WORK_DIR":        workDir,
 	}
 	return m

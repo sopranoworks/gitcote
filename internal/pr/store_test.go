@@ -271,6 +271,67 @@ func TestStoreFindByBranchesIncludesNewStates(t *testing.T) {
 	}
 }
 
+func TestStoreRejectionReason(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now()
+
+	p := &pr.PullRequest{
+		Title:        "Test PR",
+		SourceBranch: "feature",
+		TargetBranch: "main",
+		State:        pr.StateOpen,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	s.Create(p)
+
+	got, _ := s.Get(1)
+	got.State = pr.StateRejected
+	got.RejectionReason = "Code style issues: missing error handling in auth middleware"
+	got.UpdatedAt = time.Now()
+	if err := s.Update(got); err != nil {
+		t.Fatal(err)
+	}
+
+	got2, _ := s.Get(1)
+	if got2.State != pr.StateRejected {
+		t.Errorf("state = %q, want rejected", got2.State)
+	}
+	if got2.RejectionReason != "Code style issues: missing error handling in auth middleware" {
+		t.Errorf("rejection_reason = %q", got2.RejectionReason)
+	}
+}
+
+func TestStoreRejectionReasonEmpty(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now()
+
+	p := &pr.PullRequest{
+		Title:        "Test PR",
+		SourceBranch: "feature",
+		TargetBranch: "main",
+		State:        pr.StateOpen,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	s.Create(p)
+
+	got, _ := s.Get(1)
+	got.State = pr.StateRejected
+	got.UpdatedAt = time.Now()
+	if err := s.Update(got); err != nil {
+		t.Fatal(err)
+	}
+
+	got2, _ := s.Get(1)
+	if got2.State != pr.StateRejected {
+		t.Errorf("state = %q, want rejected", got2.State)
+	}
+	if got2.RejectionReason != "" {
+		t.Errorf("rejection_reason should be empty, got %q", got2.RejectionReason)
+	}
+}
+
 func openTestStore(t *testing.T) *pr.Store {
 	t.Helper()
 	s, err := pr.Open(filepath.Join(t.TempDir(), "prs.db"))
