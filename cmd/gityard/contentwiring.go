@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -86,6 +87,7 @@ type contentSearchPayload struct {
 	Namespace   string `json:"namespace"`
 	ProjectName string `json:"projectName"`
 	Query       string `json:"query"`
+	SearchIn    string `json:"search_in,omitempty"`
 }
 
 // --- GET_PROJECTS ---
@@ -273,8 +275,8 @@ func handleGetFileAt(c *uiws.Client, gitStore *git.Store, payload json.RawMessag
 // --- GET_DIFF ---
 
 type diffLineWS struct {
-	Type    string `json:"type"`
-	Content string `json:"content"`
+	Op   string `json:"op"`
+	Text string `json:"text"`
 }
 
 type diffHunkWS struct {
@@ -347,21 +349,21 @@ func computeLineDiff(from, to string) []diffHunkWS {
 	i, j := 0, 0
 	for i < maxOld && j < maxNew {
 		if fromLines[i] == toLines[j] {
-			lines = append(lines, diffLineWS{Type: "context", Content: fromLines[i]})
+			lines = append(lines, diffLineWS{Op: "equal", Text: fromLines[i]})
 			i++
 			j++
 		} else {
-			lines = append(lines, diffLineWS{Type: "remove", Content: fromLines[i]})
-			lines = append(lines, diffLineWS{Type: "add", Content: toLines[j]})
+			lines = append(lines, diffLineWS{Op: "delete", Text: fromLines[i]})
+			lines = append(lines, diffLineWS{Op: "add", Text: toLines[j]})
 			i++
 			j++
 		}
 	}
 	for ; i < maxOld; i++ {
-		lines = append(lines, diffLineWS{Type: "remove", Content: fromLines[i]})
+		lines = append(lines, diffLineWS{Op: "delete", Text: fromLines[i]})
 	}
 	for ; j < maxNew; j++ {
-		lines = append(lines, diffLineWS{Type: "add", Content: toLines[j]})
+		lines = append(lines, diffLineWS{Op: "add", Text: toLines[j]})
 	}
 
 	if len(lines) == 0 {
@@ -390,9 +392,15 @@ func splitLines(s string) []string {
 
 // --- SEARCH_FILES ---
 
+const (
+	maxSearchFileSize = 100 * 1024
+	maxSearchResults  = 50
+	snippetContext    = 40
+)
+
 type searchMatchWS struct {
 	Path    string `json:"path"`
-	Matches int    `json:"matches"`
+	Snippet string `json:"snippet,omitempty"`
 }
 
 func handleSearchFiles(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
@@ -408,28 +416,108 @@ func handleSearchFiles(c *uiws.Client, gitStore *git.Store, payload json.RawMess
 	}
 	hash, err := git.ResolveRef(repo, "")
 	if err != nil {
-		c.SendResponse(MsgSearchFiles, map[string]interface{}{"results": []searchMatchWS{}})
+		c.SendResponse(MsgSearchFiles, map[string]interface{}{"matches": []searchMatchWS{}})
 		return
 	}
 	commit, err := repo.CommitObject(hash)
 	if err != nil {
-		c.SendResponse(MsgSearchFiles, map[string]interface{}{"results": []searchMatchWS{}})
+		c.SendResponse(MsgSearchFiles, map[string]interface{}{"matches": []searchMatchWS{}})
 		return
 	}
 	tree, err := commit.Tree()
 	if err != nil {
-		c.SendResponse(MsgSearchFiles, map[string]interface{}{"results": []searchMatchWS{}})
+		c.SendResponse(MsgSearchFiles, map[string]interface{}{"matches": []searchMatchWS{}})
 		return
 	}
 
+	searchIn := p.SearchIn
+	if searchIn == "" {
+		searchIn = "both"
+	}
+	doFilename := searchIn == "filename" || searchIn == "both"
+	doContent := searchIn == "content" || searchIn == "both"
+
 	query := strings.ToLower(p.Query)
+	seen := make(map[string]int)
 	var results []searchMatchWS
+
 	_ = tree.Files().ForEach(func(f *object.File) error {
-		if strings.Contains(strings.ToLower(f.Name), query) {
-			results = append(results, searchMatchWS{Path: f.Name, Matches: 1})
+		if len(results) >= maxSearchResults {
+			return io.EOF
 		}
+
+		path := f.Name
+
+		if doFilename && strings.Contains(strings.ToLower(path), query) {
+			seen[path] = len(results)
+			results = append(results, searchMatchWS{Path: path})
+		}
+
+		if doContent && f.Size <= maxSearchFileSize {
+			reader, rerr := f.Reader()
+			if rerr != nil {
+				return nil
+			}
+			data, rerr := io.ReadAll(reader)
+			reader.Close()
+			if rerr != nil {
+				return nil
+			}
+			if searchIsBinary(data) {
+				return nil
+			}
+			content := string(data)
+			idx := strings.Index(strings.ToLower(content), query)
+			if idx >= 0 {
+				snippet := searchSnippet(content, idx, len(p.Query))
+				if i, ok := seen[path]; ok {
+					results[i].Snippet = snippet
+				} else {
+					seen[path] = len(results)
+					results = append(results, searchMatchWS{Path: path, Snippet: snippet})
+				}
+			}
+		}
+
 		return nil
 	})
-	c.SendResponse(MsgSearchFiles, map[string]interface{}{"results": results})
+
+	c.SendResponse(MsgSearchFiles, map[string]interface{}{"matches": results})
+}
+
+func searchIsBinary(data []byte) bool {
+	check := data
+	if len(check) > 512 {
+		check = check[:512]
+	}
+	for _, b := range check {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func searchSnippet(content string, matchIdx, queryLen int) string {
+	start := matchIdx - snippetContext
+	if start < 0 {
+		start = 0
+	}
+	end := matchIdx + queryLen + snippetContext
+	if end > len(content) {
+		end = len(content)
+	}
+	s := content[start:end]
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	prefix := ""
+	suffix := ""
+	if start > 0 {
+		prefix = "…"
+	}
+	if end < len(content) {
+		suffix = "…"
+	}
+	return prefix + s + suffix
 }
 

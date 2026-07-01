@@ -115,9 +115,15 @@ const projectRoute = createRoute({
   component: ProjectPage,
 })
 
+interface BlobSearch { highlight?: string }
+
 const blobRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/p/$namespace/$project/blob/$',
+  validateSearch: (search: Record<string, unknown>): BlobSearch => {
+    const highlight = typeof search.highlight === 'string' ? search.highlight : undefined
+    return highlight ? { highlight } : {}
+  },
   component: BlobPage,
 })
 

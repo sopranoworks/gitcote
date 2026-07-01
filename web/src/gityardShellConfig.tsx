@@ -186,8 +186,9 @@ function useGitYardRailControls(
 
       if (v === 'history') {
         const ref = parseProjectFile(pathname)
-        if (ref) {
-          void navigate({ to: '/p/$namespace/$project/history/$', params: { namespace: ref.ns, project: ref.proj, _splat: ref.path ?? '' } })
+        const prefix = ref ?? parseProjectPrefix(pathname)
+        if (prefix) {
+          void navigate({ to: '/p/$namespace/$project/history/$', params: { namespace: prefix.ns, project: prefix.proj, _splat: ref?.path ?? '' } })
         }
       }
 
@@ -219,6 +220,7 @@ function useResetRailOnProjectChange(setRail: (v: string) => void): void {
 function deriveActiveRail(pathname: string, rail: string): string {
   if (isSettingsPath(pathname)) return 'settings'
   if (/^\/p\/[^/]+\/[^/]+\/prs/.test(pathname)) return 'prs'
+  if (/^\/p\/[^/]+\/[^/]+\/history(\/|$)/.test(pathname)) return 'history'
   return rail === 'settings' ? 'explorer' : rail
 }
 
