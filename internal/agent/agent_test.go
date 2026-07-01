@@ -621,6 +621,118 @@ func TestBuiltinHasEnvDir(t *testing.T) {
 	}
 }
 
+func TestPrepareWorkDir_PrepareShHook(t *testing.T) {
+	t.Run("succeeds", func(t *testing.T) {
+		envDir := t.TempDir()
+		os.WriteFile(filepath.Join(envDir, "prepare.sh"), []byte("echo \"prepared\" > $WORK_DIR/prepared.txt\n"), 0o755)
+
+		config := &AgentConfig{
+			DirName: "test_agent",
+			Role:    "reviewer",
+			Command: "echo",
+			Prompt:  "test",
+			EnvDir:  envDir,
+		}
+		ctx := &SpawnContext{Namespace: "ns", PRId: "ns/proj#1"}
+
+		workDir, cleanup, err := PrepareWorkDir(config, ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+
+		data, err := os.ReadFile(filepath.Join(workDir, "prepared.txt"))
+		if err != nil {
+			t.Fatal("marker file not created by prepare.sh")
+		}
+		if strings.TrimSpace(string(data)) != "prepared" {
+			t.Errorf("marker content = %q, want \"prepared\"", strings.TrimSpace(string(data)))
+		}
+	})
+
+	t.Run("fails", func(t *testing.T) {
+		envDir := t.TempDir()
+		os.WriteFile(filepath.Join(envDir, "prepare.sh"), []byte("exit 1\n"), 0o755)
+
+		config := &AgentConfig{
+			DirName: "test_agent",
+			Role:    "reviewer",
+			Command: "echo",
+			Prompt:  "test",
+			EnvDir:  envDir,
+		}
+		ctx := &SpawnContext{Namespace: "ns"}
+
+		workDir, _, err := PrepareWorkDir(config, ctx)
+		if err == nil {
+			t.Fatal("expected error from failing prepare.sh")
+		}
+		if !strings.Contains(err.Error(), "prepare.sh failed") {
+			t.Errorf("error = %v, want containing \"prepare.sh failed\"", err)
+		}
+		if _, serr := os.Stat(workDir); !os.IsNotExist(serr) {
+			t.Error("workdir should be cleaned up after prepare.sh failure")
+		}
+	})
+
+	t.Run("not_present", func(t *testing.T) {
+		envDir := t.TempDir()
+		os.WriteFile(filepath.Join(envDir, "README.md"), []byte("no prepare.sh here"), 0o644)
+
+		config := &AgentConfig{
+			DirName: "test_agent",
+			Role:    "reviewer",
+			Command: "echo",
+			Prompt:  "test",
+			EnvDir:  envDir,
+		}
+		ctx := &SpawnContext{Namespace: "ns"}
+
+		workDir, cleanup, err := PrepareWorkDir(config, ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+
+		if _, serr := os.Stat(workDir); os.IsNotExist(serr) {
+			t.Error("workdir should exist when prepare.sh is absent")
+		}
+	})
+
+	t.Run("env_vars_passed", func(t *testing.T) {
+		envDir := t.TempDir()
+		os.WriteFile(filepath.Join(envDir, "prepare.sh"), []byte("echo \"${PR_ID}|${NAMESPACE}\" > $WORK_DIR/env_check.txt\n"), 0o755)
+
+		config := &AgentConfig{
+			DirName: "test_agent",
+			Role:    "reviewer",
+			Command: "echo",
+			Prompt:  "test",
+			EnvDir:  envDir,
+		}
+		ctx := &SpawnContext{
+			PRId:      "testns/testproj#42",
+			Namespace: "testns",
+		}
+
+		workDir, cleanup, err := PrepareWorkDir(config, ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+
+		data, err := os.ReadFile(filepath.Join(workDir, "env_check.txt"))
+		if err != nil {
+			t.Fatal("env_check.txt not created")
+		}
+		got := strings.TrimSpace(string(data))
+		want := "testns/testproj#42|testns"
+		if got != want {
+			t.Errorf("env vars = %q, want %q", got, want)
+		}
+	})
+}
+
 func mkAgent(t *testing.T, root, name, role, displayName, command, prompt string) {
 	t.Helper()
 	dir := filepath.Join(root, name)

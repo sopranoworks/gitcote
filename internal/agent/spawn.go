@@ -66,6 +66,24 @@ func PrepareWorkDir(config *AgentConfig, ctx *SpawnContext) (workDir string, cle
 		}
 	}
 
+	prepareScript := filepath.Join(workDir, "prepare.sh")
+	if _, serr := os.Stat(prepareScript); serr == nil {
+		cmd := exec.Command("sh", prepareScript)
+		cmd.Dir = workDir
+		envVars := os.Environ()
+		for k, v := range vars {
+			envVars = append(envVars, strings.TrimPrefix(k, "$")+"="+v)
+		}
+		cmd.Env = envVars
+		var output bytes.Buffer
+		cmd.Stdout = &output
+		cmd.Stderr = &output
+		if rerr := cmd.Run(); rerr != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("prepare.sh failed: %w\noutput: %s", rerr, output.String())
+		}
+	}
+
 	return workDir, cleanup, nil
 }
 
