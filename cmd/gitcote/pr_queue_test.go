@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/integrity"
-	"github.com/sopranoworks/gityard/internal/pr"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/integrity"
+	"github.com/sopranoworks/gitcote/internal/pr"
 	"github.com/sopranoworks/shoka/pkg/oauthstore"
 )
 

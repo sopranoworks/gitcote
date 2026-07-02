@@ -132,11 +132,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RawQuery: r.URL.RawQuery,
 	}
 	// The backend's requireReceivePackAuth checks for an Authorization header on
-	// receive-pack requests. GitYard handles auth at its own layer (above), so
+	// receive-pack requests. GitCote handles auth at its own layer (above), so
 	// inject a sentinel header to satisfy the backend's check when it's absent.
 	if r2.Header.Get("Authorization") == "" {
 		r2.Header = r2.Header.Clone()
-		r2.Header.Set("Authorization", "Bearer gityard-internal")
+		r2.Header.Set("Authorization", "Bearer gitcote-internal")
 	}
 	// Attach push options to the context for downstream access.
 	if len(pushOpts) > 0 {
@@ -193,7 +193,7 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, namespace, p
 
 	if err := AuthorizeGitZone(scope, namespace, project, level); err != nil {
 		if !hasPrincipal {
-			w.Header().Set("WWW-Authenticate", `Basic realm="GitYard"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitCote"`)
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 		} else {
 			http.Error(w, "permission denied", http.StatusForbidden)
@@ -257,13 +257,13 @@ func BasicAuthMiddleware(validateToken func(string) (auth.Principal, auth.Reject
 			}
 			_, password, ok := r.BasicAuth()
 			if !ok || password == "" {
-				w.Header().Set("WWW-Authenticate", `Basic realm="GitYard"`)
+				w.Header().Set("WWW-Authenticate", `Basic realm="GitCote"`)
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
 			}
 			principal, _, valid := validateToken(password)
 			if !valid {
-				w.Header().Set("WWW-Authenticate", `Basic realm="GitYard"`)
+				w.Header().Set("WWW-Authenticate", `Basic realm="GitCote"`)
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
 			}

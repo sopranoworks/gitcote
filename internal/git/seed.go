@@ -178,7 +178,7 @@ func SeedMerge(repo *gogit.Repository, localRef, remoteRef plumbing.Hash) (*Seed
 	}
 
 	mergeHash, err := MergeCommitFromTree(repo, result.TreeHash, localRef, remoteRef,
-		"Auto-merge seed sync", "GitYard", "gityard@localhost")
+		"Auto-merge seed sync", "GitCote", "gitcote@localhost")
 	if err != nil {
 		return nil, fmt.Errorf("create merge commit: %w", err)
 	}
@@ -186,9 +186,9 @@ func SeedMerge(repo *gogit.Repository, localRef, remoteRef plumbing.Hash) (*Seed
 }
 
 // CreateSeedTempClone clones the seed into a temporary directory and adds
-// a "gityard" remote pointing to gityardURL (if non-empty).
-func CreateSeedTempClone(seedURL string, sshKey []byte, gityardURL string) (string, error) {
-	dir, err := os.MkdirTemp("", "gityard-seed-sync-")
+// a "gitcote" remote pointing to gitcoteURL (if non-empty).
+func CreateSeedTempClone(seedURL string, sshKey []byte, gitcoteURL string) (string, error) {
+	dir, err := os.MkdirTemp("", "gitcote-seed-sync-")
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
@@ -208,10 +208,10 @@ func CreateSeedTempClone(seedURL string, sshKey []byte, gityardURL string) (stri
 		return "", fmt.Errorf("clone seed: %w", err)
 	}
 
-	if gityardURL != "" {
+	if gitcoteURL != "" {
 		_, _ = repo.CreateRemote(&config.RemoteConfig{
-			Name: "gityard",
-			URLs: []string{gityardURL},
+			Name: "gitcote",
+			URLs: []string{gitcoteURL},
 		})
 	}
 

@@ -14,7 +14,7 @@ import (
 
 	"log/slog"
 
-	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gitcote/internal/git"
 	"github.com/sopranoworks/shoka/pkg/auth"
 )
 

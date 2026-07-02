@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/vault"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/vault"
 	"github.com/sopranoworks/shoka/pkg/auth"
 )
 
@@ -26,7 +26,7 @@ func TestMCPAuthE2E(t *testing.T) {
 	defer v.Close()
 
 	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "gityard-test", Version: "0.0.0-test"},
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"},
 		nil,
 	)
 	mcp.AddTool(mcpServer, &mcp.Tool{

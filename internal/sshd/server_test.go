@@ -16,9 +16,9 @@ import (
 
 	gossh "golang.org/x/crypto/ssh"
 
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/sshd"
-	"github.com/sopranoworks/gityard/internal/sshkeys"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/sshd"
+	"github.com/sopranoworks/gitcote/internal/sshkeys"
 )
 
 func TestSSHCloneAndPush(t *testing.T) {

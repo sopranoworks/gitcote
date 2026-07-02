@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gitcote/internal/git"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 )
 
@@ -269,5 +269,5 @@ func handleMoveProject(c *uiws.Client, gitStore *git.Store, payload json.RawMess
 }
 
 func handleNamespaceRecover(c *uiws.Client, payload json.RawMessage) {
-	c.SendError("recovery actions are not supported in GitYard")
+	c.SendError("recovery actions are not supported in GitCote")
 }

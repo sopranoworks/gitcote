@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 
-const PORT = Number(process.env.GITYARD_E2E_PORT ?? 9099)
+const PORT = Number(process.env.GITCOTE_E2E_PORT ?? 9099)
 
 async function ensureAdminLoggedIn(page: Page) {
   const status = await page.request.get(`http://localhost:${PORT}/auth/status`)
@@ -77,7 +77,7 @@ function git(cwd: string, ...args: string[]) {
 }
 
 function pushTestCommits(token: string, ns: string, proj: string) {
-  const tmp = mkdtempSync(join(tmpdir(), 'gityard-hist-'))
+  const tmp = mkdtempSync(join(tmpdir(), 'gitcote-hist-'))
   const url = `http://oauth2:${token}@localhost:${PORT}/${ns}/${proj}.git`
   git(tmp, 'clone', url, 'repo')
   const repo = join(tmp, 'repo')
@@ -87,12 +87,12 @@ function pushTestCommits(token: string, ns: string, proj: string) {
   git(repo, 'commit', '-m', 'add hello.txt')
   git(repo, 'push', '-u', 'origin', 'HEAD:refs/heads/main')
 
-  writeFileSync(join(repo, 'hello.txt'), 'Hello, GitYard!\nSecond line.\n')
+  writeFileSync(join(repo, 'hello.txt'), 'Hello, GitCote!\nSecond line.\n')
   git(repo, 'add', 'hello.txt')
   git(repo, 'commit', '-m', 'update hello.txt with second line')
   git(repo, 'push', 'origin', 'HEAD:main')
 
-  writeFileSync(join(repo, 'hello.txt'), 'Hello, GitYard!\nSecond line.\nThird line added.\n')
+  writeFileSync(join(repo, 'hello.txt'), 'Hello, GitCote!\nSecond line.\nThird line added.\n')
   git(repo, 'add', 'hello.txt')
   git(repo, 'commit', '-m', 'add third line to hello.txt')
   git(repo, 'push', 'origin', 'HEAD:main')
@@ -134,7 +134,7 @@ test.describe('History', () => {
     await expect(commits).toHaveCount(3, { timeout: 5000 })
     await expect(commits.first()).toContainText('add third line')
 
-    await page.screenshot({ path: 'test-results/gityard-history-sidebar.png', fullPage: true })
+    await page.screenshot({ path: 'test-results/gitcote-history-sidebar.png', fullPage: true })
   })
 
   test('click commit loads file at version', async ({ page }) => {
@@ -148,11 +148,11 @@ test.describe('History', () => {
     await expect(page).toHaveURL(/at=/, { timeout: 5000 })
 
     // Verify content at that version
-    await expect(page.getByText('Hello, GitYard!')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Hello, GitCote!')).toBeVisible({ timeout: 5000 })
     await expect(page.getByText('Second line.')).toBeVisible({ timeout: 5000 })
     await expect(page.getByText('Third line added.')).not.toBeVisible()
 
-    await page.screenshot({ path: 'test-results/gityard-history-version-view.png', fullPage: true })
+    await page.screenshot({ path: 'test-results/gitcote-history-version-view.png', fullPage: true })
   })
 
   test('diff view shows changes between versions', async ({ page }) => {
@@ -169,6 +169,6 @@ test.describe('History', () => {
     const addedLines = page.locator('[data-op="add"]')
     await expect(addedLines.first()).toBeVisible({ timeout: 5000 })
 
-    await page.screenshot({ path: 'test-results/gityard-history-diff-view.png', fullPage: true })
+    await page.screenshot({ path: 'test-results/gitcote-history-diff-view.png', fullPage: true })
   })
 })

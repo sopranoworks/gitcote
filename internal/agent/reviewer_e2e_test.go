@@ -93,7 +93,7 @@ func NewMockMCPServer(t *testing.T, expectedToken string) *MockMCPServer {
 	m := &MockMCPServer{}
 
 	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "gityard-mock", Version: "0.0.0-test"},
+		&mcp.Implementation{Name: "gitcote-mock", Version: "0.0.0-test"},
 		nil,
 	)
 
@@ -245,7 +245,7 @@ func (m *MockMCPServer) HasCall(tool string) bool {
 
 func writeMockMCPConfig(workDir, mockURL string, headers map[string]string) error {
 	return WriteMCPConfig(workDir, map[string]MCPServerEntry{
-		"gityard": {Type: "http", URL: mockURL, Headers: headers},
+		"gitcote": {Type: "http", URL: mockURL, Headers: headers},
 	})
 }
 

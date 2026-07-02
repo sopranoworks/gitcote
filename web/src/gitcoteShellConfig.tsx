@@ -86,7 +86,7 @@ function useCrumbs(): Crumb[] {
   return crumbs
 }
 
-function GitYardBreadcrumbs({ styles }: { styles: Record<string, string> }) {
+function GitCoteBreadcrumbs({ styles }: { styles: Record<string, string> }) {
   const crumbs = useCrumbs()
   if (crumbs.length === 0) return null
   return (
@@ -127,7 +127,7 @@ function parseProjectFile(pathname: string): { ns: string; proj: string; path: s
   return { ns: decodeURIComponent(m[1]), proj: decodeURIComponent(m[2]), path: m[3] ? decodeURIComponent(m[3]) : null }
 }
 
-function useGitYardRailControls(
+function useGitCoteRailControls(
   rail: string,
   sidebarOpen: boolean,
   setRail: (v: string) => void,
@@ -224,7 +224,7 @@ function deriveActiveRail(pathname: string, rail: string): string {
   return rail === 'settings' ? 'explorer' : rail
 }
 
-const gityardContentConfig = {
+const gitcoteContentConfig = {
   renderProjectExtra: (ns: string, proj: string) => (
     <>
       <CloneUrl namespace={ns} project={proj} />
@@ -233,12 +233,12 @@ const gityardContentConfig = {
   ),
 }
 
-function GitYardShellWrapper({ children }: { children: React.ReactNode }) {
-  return <ContentProvider value={gityardContentConfig}>{children}</ContentProvider>
+function GitCoteShellWrapper({ children }: { children: React.ReactNode }) {
+  return <ContentProvider value={gitcoteContentConfig}>{children}</ContentProvider>
 }
 
-export const gityardShellConfig: ShellConfig = {
-  brandName: 'GitYard',
+export const gitcoteShellConfig: ShellConfig = {
+  brandName: 'GitCote',
   railItems: [
     { id: 'explorer', label: 'Explorer', icon: EXPLORER_ICON },
     { id: 'search', label: 'Search', icon: SEARCH_ICON },
@@ -250,11 +250,11 @@ export const gityardShellConfig: ShellConfig = {
     if (view === 'prs') return <PRTreeView />
     return <Sidebar view={view} />
   },
-  renderBreadcrumbs: (styles) => <GitYardBreadcrumbs styles={styles} />,
+  renderBreadcrumbs: (styles) => <GitCoteBreadcrumbs styles={styles} />,
   renderToaster: () => <Toaster />,
-  shellWrapper: GitYardShellWrapper,
-  useRailControls: useGitYardRailControls,
+  shellWrapper: GitCoteShellWrapper,
+  useRailControls: useGitCoteRailControls,
   useResetRailOnProjectChange: useResetRailOnProjectChange,
   deriveActiveRail,
-  layoutAutoSaveId: 'gityard-layout',
+  layoutAutoSaveId: 'gitcote-layout',
 }

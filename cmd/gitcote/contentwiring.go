@@ -10,7 +10,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
-	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gitcote/internal/git"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 )

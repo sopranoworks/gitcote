@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/sopranoworks/gityard/internal/agent"
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/integrity"
-	"github.com/sopranoworks/gityard/internal/pr"
+	"github.com/sopranoworks/gitcote/internal/agent"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/integrity"
+	"github.com/sopranoworks/gitcote/internal/pr"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/oauthstore"
 	"github.com/sopranoworks/shoka/pkg/uiws"
@@ -48,7 +48,7 @@ func IsAgentToken(token string) bool {
 	return ok
 }
 
-const agentTokenClientID = "gityard-agent"
+const agentTokenClientID = "gitcote-agent"
 
 func agentTokenKey(namespace, project string, prNumber int) string {
 	if prNumber == 0 {
@@ -110,7 +110,7 @@ func issueAgentToken(ec *eventContext, namespace, project string, prNumber int, 
 	name := fmt.Sprintf("%s-%s", role, agentTokenKey(namespace, project, prNumber))
 	rec, err := ec.oauthStore.NewSeries(
 		agentTokenClientID,
-		oauthstore.Principal{Name: "agent-token", Email: "agent@gityard.local"},
+		oauthstore.Principal{Name: "agent-token", Email: "agent@gitcote.local"},
 		"",
 		scope,
 		name,
@@ -169,7 +169,7 @@ type eventContext struct {
 	integrityHS *integrity.Store
 	oauthStore  *oauthstore.Store
 	agentCfg    AgentSpawnConfig
-	gityardURL  string
+	gitcoteURL  string
 	httpURL     string
 	seedCtx     *seedContext
 	logger      *slog.Logger
@@ -336,14 +336,14 @@ func executeAgentForPR(ec *eventContext, ac *agent.AgentConfig, p *pr.PullReques
 		return nil
 	}
 
-	if ec.gityardURL != "" {
-		mcpURL := strings.TrimSuffix(ec.gityardURL, "/") + "/mcp"
+	if ec.gitcoteURL != "" {
+		mcpURL := strings.TrimSuffix(ec.gitcoteURL, "/") + "/mcp"
 		entry := agent.MCPServerEntry{Type: "http", URL: mcpURL}
 		if token != "" {
 			entry.Headers = map[string]string{"Authorization": "Bearer " + token}
 		}
 		if werr := agent.WriteMCPConfig(workDir, map[string]agent.MCPServerEntry{
-			"gityard": entry,
+			"gitcote": entry,
 		}); werr != nil {
 			ec.logger.Error("write mcp config", "error", werr, "pr", p.Number, "role", role)
 		}
@@ -495,7 +495,7 @@ func reattemptMerge(ec *eventContext, p *pr.PullRequest, agentName, role string)
 		}
 	} else {
 		msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
-		mergeHash, err = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
+		mergeHash, err = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitCote", "gitcote@localhost")
 		if err != nil {
 			ec.logger.Warn("reattempt merge: create commit", "error", err, "pr", p.Number)
 			return
@@ -676,7 +676,7 @@ func autoMergePR(ec *eventContext, p *pr.PullRequest) error {
 	} else {
 		msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
 		var mergeErr error
-		mergeHash, mergeErr = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
+		mergeHash, mergeErr = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitCote", "gitcote@localhost")
 		if mergeErr != nil {
 			return fmt.Errorf("create merge commit: %w", mergeErr)
 		}
@@ -879,14 +879,14 @@ func executeAgentForSeedSync(ec *eventContext, ac *agent.AgentConfig, ns, proj, 
 		return nil
 	}
 
-	if ec.gityardURL != "" {
-		mcpURL := strings.TrimSuffix(ec.gityardURL, "/") + "/mcp"
+	if ec.gitcoteURL != "" {
+		mcpURL := strings.TrimSuffix(ec.gitcoteURL, "/") + "/mcp"
 		entry := agent.MCPServerEntry{Type: "http", URL: mcpURL}
 		if token != "" {
 			entry.Headers = map[string]string{"Authorization": "Bearer " + token}
 		}
 		if werr := agent.WriteMCPConfig(workDir, map[string]agent.MCPServerEntry{
-			"gityard": entry,
+			"gitcote": entry,
 		}); werr != nil {
 			ec.logger.Error("write mcp config for seed sync", "error", werr, "ns", ns, "proj", proj)
 		}

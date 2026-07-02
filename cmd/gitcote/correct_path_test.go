@@ -12,9 +12,9 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/integrity"
-	"github.com/sopranoworks/gityard/internal/pr"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/integrity"
+	"github.com/sopranoworks/gitcote/internal/pr"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/oauthstore"
 )
@@ -141,7 +141,7 @@ func TestCorrectPath_PushToPRToReviewToApprove(t *testing.T) {
 
 	// --- Step 4: token authenticates on MCP ---
 	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "gityard-test", Version: "0.0.0-test"},
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"},
 		nil,
 	)
 

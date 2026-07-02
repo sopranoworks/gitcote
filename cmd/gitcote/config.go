@@ -10,8 +10,8 @@ import (
 	yaml "go.yaml.in/yaml/v4"
 )
 
-// Config is GitYard's own configuration. It is deliberately INDEPENDENT of Shoka's
-// internal/config: GitYard owns this struct and translates it into the per-package
+// Config is GitCote's own configuration. It is deliberately INDEPENDENT of Shoka's
+// internal/config: GitCote owns this struct and translates it into the per-package
 // Config types of the inherited Shoka core (the same pattern cmd/shoka uses — a
 // unified file decoded here, then mapped onto pkg/auth, pkg/authapi, pkg/oauth, …).
 // Step 1 carries only the fields needed to boot the core; Git-hosting / PR fields

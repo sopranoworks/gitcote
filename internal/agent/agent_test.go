@@ -275,7 +275,7 @@ func TestVariableSubstitution_NoMCPURLVars(t *testing.T) {
 	ctx := &SpawnContext{Namespace: "ns"}
 	vars := buildVarMap(ctx, "/work")
 
-	for _, key := range []string{"$GITYARD_MCP_URL", "$GITYARD_GIT_URL", "$GITYARD_SSH_URL", "$SHOKA_MCP_URL"} {
+	for _, key := range []string{"$GITCOTE_MCP_URL", "$GITCOTE_GIT_URL", "$GITCOTE_SSH_URL", "$SHOKA_MCP_URL"} {
 		if _, ok := vars[key]; ok {
 			t.Errorf("%s should NOT be in variable map", key)
 		}
@@ -464,7 +464,7 @@ func TestPrepareWorkDir_CleanCLAUDEmd(t *testing.T) {
 	}
 	content := string(claudeMD)
 
-	for _, banned := range []string{"$GITYARD_MCP_URL", "$SHOKA_MCP_URL", "GITYARD_MCP_URL", "SHOKA_MCP_URL", "shoka", "Shoka"} {
+	for _, banned := range []string{"$GITCOTE_MCP_URL", "$SHOKA_MCP_URL", "GITCOTE_MCP_URL", "SHOKA_MCP_URL", "shoka", "Shoka"} {
 		if strings.Contains(content, banned) {
 			t.Errorf("CLAUDE.md contains banned reference %q:\n%s", banned, content)
 		}
@@ -509,8 +509,8 @@ func TestResolvedPrompt_OrderResultFiles(t *testing.T) {
 	if !strings.Contains(resolved, "reports/complete.md") {
 		t.Error("$RESULT_FILES not substituted")
 	}
-	if strings.Contains(resolved, "$GITYARD_MCP_URL") {
-		t.Error("prompt still contains $GITYARD_MCP_URL")
+	if strings.Contains(resolved, "$GITCOTE_MCP_URL") {
+		t.Error("prompt still contains $GITCOTE_MCP_URL")
 	}
 	if strings.Contains(resolved, "$SHOKA_MCP_URL") {
 		t.Error("prompt still contains $SHOKA_MCP_URL")
@@ -553,7 +553,7 @@ func TestDefaultAgentPrompts_NoMCPURLReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	banned := []string{"$GITYARD_MCP_URL", "$GITYARD_GIT_URL", "$GITYARD_SSH_URL", "$SHOKA_MCP_URL", "Shoka"}
+	banned := []string{"$GITCOTE_MCP_URL", "$GITCOTE_GIT_URL", "$GITCOTE_SSH_URL", "$SHOKA_MCP_URL", "Shoka"}
 
 	for _, c := range configs {
 		if !c.IsBuiltin {

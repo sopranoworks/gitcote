@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 
-const PORT = Number(process.env.GITYARD_E2E_PORT ?? 9099)
+const PORT = Number(process.env.GITCOTE_E2E_PORT ?? 9099)
 
 async function ensureAdminLoggedIn(page: Page) {
   const status = await page.request.get(`http://localhost:${PORT}/auth/status`)
@@ -109,7 +109,7 @@ function git(cwd: string, ...args: string[]) {
 }
 
 function cloneAndInit(token: string, ns: string, proj: string): string {
-  const tmp = mkdtempSync(join(tmpdir(), 'gityard-mc-'))
+  const tmp = mkdtempSync(join(tmpdir(), 'gitcote-mc-'))
   const url = `http://oauth2:${token}@localhost:${PORT}/${ns}/${proj}.git`
   git(tmp, 'clone', url, 'repo')
   const repo = join(tmp, 'repo')

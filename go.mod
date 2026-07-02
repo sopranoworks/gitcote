@@ -1,4 +1,4 @@
-module github.com/sopranoworks/gityard
+module github.com/sopranoworks/gitcote
 
 go 1.26.2
 
@@ -47,6 +47,6 @@ require (
 )
 
 // The Shoka core (pkg/) submodule is local-only — not yet pushed or tagged (Shape A).
-// During development GitYard consumes it via this replace into the sibling checkout.
+// During development GitCote consumes it via this replace into the sibling checkout.
 // Remove once pkg/ is published and pin a real version.
 replace github.com/sopranoworks/shoka/pkg => ../shoka/pkg

@@ -8,7 +8,7 @@ import (
 
 	gossh "golang.org/x/crypto/ssh"
 
-	"github.com/sopranoworks/gityard/internal/sshkeys"
+	"github.com/sopranoworks/gitcote/internal/sshkeys"
 )
 
 func TestAddAndLookup(t *testing.T) {

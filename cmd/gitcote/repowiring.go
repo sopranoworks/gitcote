@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gitcote/internal/git"
 )
 
 func registerRepoTools(mcpServer *mcp.Server, gitStore *git.Store) {

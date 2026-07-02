@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sopranoworks/gityard/internal/integrity"
+	"github.com/sopranoworks/gitcote/internal/integrity"
 )
 
 func TestStoreGetSetRoundTrip(t *testing.T) {
@@ -68,7 +68,7 @@ func TestAgentWorkdirCRUD(t *testing.T) {
 	defer s.Close()
 
 	rec := integrity.AgentWorkdirRecord{
-		Path:      "/tmp/gityard-agent-reviewer-abc",
+		Path:      "/tmp/gitcote-agent-reviewer-abc",
 		AgentName: "default_claude_reviewer",
 		Role:      "reviewer",
 		Namespace: "ns",

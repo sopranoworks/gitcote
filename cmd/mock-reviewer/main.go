@@ -1,5 +1,5 @@
 // Command mock-reviewer is a lightweight stand-in for a real AI reviewer agent.
-// It reads .mcp.json from its working directory, connects to the GitYard MCP
+// It reads .mcp.json from its working directory, connects to the GitCote MCP
 // endpoint, reads the PR specified by environment variables, and approves it.
 // Used by the E2E full-flow test when a real claude CLI is unavailable.
 package main
@@ -59,9 +59,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	server, ok := cfg.MCPServers["gityard"]
+	server, ok := cfg.MCPServers["gitcote"]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: no 'gityard' server in .mcp.json\n")
+		fmt.Fprintf(os.Stderr, "mock-reviewer: no 'gitcote' server in .mcp.json\n")
 		os.Exit(1)
 	}
 

@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/integrity"
-	"github.com/sopranoworks/gityard/internal/pr"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/integrity"
+	"github.com/sopranoworks/gitcote/internal/pr"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/oauthstore"
 )
@@ -214,7 +214,7 @@ func TestOperatorConfirmMerge(t *testing.T) {
 	}
 
 	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "gityard-test", Version: "0.0.0-test"},
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"},
 		nil,
 	)
 	registerPRTools(mcpServer, gitStore, &seedContext{gitStore: gitStore}, ec)
@@ -347,7 +347,7 @@ func TestListPRsByStatus(t *testing.T) {
 
 	// MCP list with status filter
 	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "gityard-test", Version: "0.0.0-test"},
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"},
 		nil,
 	)
 	registerPRTools(mcpServer, ec.gitStore, &seedContext{gitStore: ec.gitStore}, ec)
@@ -596,7 +596,7 @@ func TestFullE2E_2StageReview(t *testing.T) {
 	}
 
 	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "gityard-test", Version: "0.0.0-test"},
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"},
 		nil,
 	)
 	registerPRTools(mcpServer, gitStore, &seedContext{gitStore: gitStore}, ec)

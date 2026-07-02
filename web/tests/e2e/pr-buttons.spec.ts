@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 
-const PORT = Number(process.env.GITYARD_E2E_PORT ?? 9099)
-const MCP_PORT = PORT - 1
+const PORT = Number(process.env.GITCOTE_E2E_PORT ?? 9099)
+const OAUTH_MCP_PORT = PORT - 2
 
 async function ensureAdminLoggedIn(page: Page) {
   const status = await page.request.get(`http://localhost:${PORT}/auth/status`)
@@ -78,7 +78,7 @@ function git(cwd: string, ...args: string[]) {
 }
 
 function createPR(token: string, ns: string, proj: string, branch: string, title: string) {
-  const tmp = mkdtempSync(join(tmpdir(), 'gityard-btn-'))
+  const tmp = mkdtempSync(join(tmpdir(), 'gitcote-btn-'))
   const url = `http://oauth2:${token}@localhost:${PORT}/${ns}/${proj}.git`
   git(tmp, 'clone', url, 'repo')
   const repo = join(tmp, 'repo')
@@ -110,7 +110,7 @@ async function parseSSEResponse(res: Response): Promise<unknown> {
 }
 
 async function mcpApprove(token: string, ns: string, proj: string, prNumber: number) {
-  const base = `http://localhost:${MCP_PORT}`
+  const base = `http://localhost:${OAUTH_MCP_PORT}`
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json, text/event-stream',

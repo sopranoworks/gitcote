@@ -35,6 +35,6 @@ exec docker run --rm \
   -e "GOPATH=/root/go" \
   -e "GOFLAGS=-buildvcs=false" \
   -e "HOME=/root" \
-  -e "GITYARD_E2E_PORT=${GITYARD_E2E_PORT:-9099}" \
+  -e "GITCOTE_E2E_PORT=${GITCOTE_E2E_PORT:-9099}" \
   "$IMAGE" \
   npx playwright test "$@"

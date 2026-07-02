@@ -10,7 +10,7 @@ import (
 
 	gossh "golang.org/x/crypto/ssh"
 
-	"github.com/sopranoworks/gityard/internal/vault"
+	"github.com/sopranoworks/gitcote/internal/vault"
 )
 
 func openTestVault(t *testing.T) *vault.Vault {

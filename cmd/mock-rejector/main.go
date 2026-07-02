@@ -55,9 +55,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	server, ok := cfg.MCPServers["gityard"]
+	server, ok := cfg.MCPServers["gitcote"]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "mock-rejector: no 'gityard' server in .mcp.json\n")
+		fmt.Fprintf(os.Stderr, "mock-rejector: no 'gitcote' server in .mcp.json\n")
 		os.Exit(1)
 	}
 

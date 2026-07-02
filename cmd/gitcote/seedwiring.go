@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/integrity"
-	"github.com/sopranoworks/gityard/internal/vault"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/integrity"
+	"github.com/sopranoworks/gitcote/internal/vault"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 	"github.com/sopranoworks/shoka/pkg/userstore"
@@ -53,14 +53,14 @@ type seedContext struct {
 	vault      *vault.Vault
 	userStore  *userstore.Store
 	resumed    bool
-	gityardURL string
+	gitcoteURL string
 }
 
-func buildGityardCloneURL(sc *seedContext, namespace, project string) string {
-	if sc.gityardURL == "" {
+func buildGitcoteCloneURL(sc *seedContext, namespace, project string) string {
+	if sc.gitcoteURL == "" {
 		return ""
 	}
-	return sc.gityardURL + "/" + namespace + "/" + project + ".git"
+	return sc.gitcoteURL + "/" + namespace + "/" + project + ".git"
 }
 
 // seedDispatch handles SEED_* WebSocket messages. Returns true if the message was handled.
@@ -432,11 +432,11 @@ func doSeedPull(sc *seedContext, ec *eventContext, namespace, project, branch st
 			"status":    "conflict",
 			"conflicts": conflicts,
 		}
-		gityardURL := buildGityardCloneURL(sc, namespace, project)
-		tempDir, terr := git.CreateSeedTempClone(cfg.SeedURL, pemData, gityardURL)
+		gitcoteURL := buildGitcoteCloneURL(sc, namespace, project)
+		tempDir, terr := git.CreateSeedTempClone(cfg.SeedURL, pemData, gitcoteURL)
 		if terr == nil {
 			resp["temp_clone"] = tempDir
-			resp["instructions"] = "Resolve conflicts in the temp clone, then: git push gityard HEAD:main"
+			resp["instructions"] = "Resolve conflicts in the temp clone, then: git push gitcote HEAD:main"
 			if headStore != nil {
 				_ = headStore.AddTempClone(integrity.TempCloneRecord{
 					Namespace: namespace, Project: project,
@@ -595,8 +595,8 @@ func executeSeedPushWithMerge(sc *seedContext, namespace, projectName, branch st
 				conflicts = append(conflicts, conflictInfoWire{Path: c.Path, Type: c.Type})
 			}
 			result := SeedPushResult{Status: "conflict", Message: "push conflicts", Conflicts: conflicts}
-			gityardURL := buildGityardCloneURL(sc, namespace, projectName)
-			tempDir, terr := git.CreateSeedTempClone(cfg.SeedURL, pemData, gityardURL)
+			gitcoteURL := buildGitcoteCloneURL(sc, namespace, projectName)
+			tempDir, terr := git.CreateSeedTempClone(cfg.SeedURL, pemData, gitcoteURL)
 			if terr == nil {
 				result.TempCloneDir = tempDir
 				if headStore != nil {
@@ -622,12 +622,12 @@ func executeSeedPushWithMerge(sc *seedContext, namespace, projectName, branch st
 }
 
 // registerSeedTools registers seed-related MCP tools.
-func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vault, gityardURL string, ec *eventContext) {
+func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vault, gitcoteURL string, ec *eventContext) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "push_to_seed",
 		Description: "Push a branch to the configured seed repository via SSH. Auto-merges if seed has diverged cleanly; reports conflicts otherwise.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in pushToSeedInput) (*mcp.CallToolResult, pushToSeedOutput, error) {
-		sc := &seedContext{gitStore: gitStore, vault: v, gityardURL: gityardURL}
+		sc := &seedContext{gitStore: gitStore, vault: v, gitcoteURL: gitcoteURL}
 		r := executeSeedPushWithMerge(sc, in.Namespace, in.ProjectName, in.Branch)
 		return nil, pushToSeedOutput{
 			Success:      r.Success,
@@ -643,7 +643,7 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 		Name:        "pull_from_seed",
 		Description: "Pull from the configured seed repository via SSH. Auto-merges if branches have diverged cleanly; reports conflicts otherwise.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in pullFromSeedInput) (*mcp.CallToolResult, pullFromSeedOutput, error) {
-		sc := &seedContext{gitStore: gitStore, vault: v, gityardURL: gityardURL}
+		sc := &seedContext{gitStore: gitStore, vault: v, gitcoteURL: gitcoteURL}
 		r := executeSeedPull(sc, ec, in.Namespace, in.ProjectName, in.Branch)
 		success, _ := r["success"].(bool)
 		msg, _ := r["message"].(string)
@@ -730,7 +730,7 @@ type pullFromSeedOutput struct {
 
 func tempCloneInstructions(r SeedPushResult) string {
 	if r.TempCloneDir != "" {
-		return "Resolve conflicts in the temp clone, then: git push gityard HEAD:main"
+		return "Resolve conflicts in the temp clone, then: git push gitcote HEAD:main"
 	}
 	return ""
 }

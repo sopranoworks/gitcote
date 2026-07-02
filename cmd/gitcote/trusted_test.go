@@ -235,7 +235,7 @@ func basicAuthWrap(validate func(string) (auth.Principal, auth.RejectReason, boo
 		}
 		_, password, ok := r.BasicAuth()
 		if !ok || password == "" {
-			w.Header().Set("WWW-Authenticate", `Basic realm="GitYard"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitCote"`)
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}

@@ -6,13 +6,13 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gitcote/internal/git"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/oauthstore"
 )
 
-const gityardIssuedClientID = "gityard-issued"
+const gitcoteIssuedClientID = "gitcote-issued"
 
 func checkBranchProtection(gitStore *git.Store, namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
 	effectiveLevel := git.EffectiveGitLevel(principal.Scope, namespace, project)
@@ -87,7 +87,7 @@ func registerTokenTools(mcpServer *mcp.Server, gitStore *git.Store, oauthStore *
 
 		now := time.Now()
 		rec, err := oauthStore.NewSeries(
-			gityardIssuedClientID,
+			gitcoteIssuedClientID,
 			oauthstore.Principal{Name: "git-token", Email: principal.Email},
 			"",
 			scope,

@@ -1,4 +1,4 @@
-module github.com/sopranoworks/gityard/build/frontend
+module github.com/sopranoworks/gitcote/build/frontend
 
 go 1.26.2
 

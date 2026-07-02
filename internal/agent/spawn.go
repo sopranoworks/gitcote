@@ -45,7 +45,7 @@ type SpawnResult struct {
 
 func PrepareWorkDir(config *AgentConfig, ctx *SpawnContext) (workDir string, cleanup func(), err error) {
 	suffix, _ := randomHex(8)
-	workDir = filepath.Join(os.TempDir(), fmt.Sprintf("gityard-agent-%s-%s", config.Role, suffix))
+	workDir = filepath.Join(os.TempDir(), fmt.Sprintf("gitcote-agent-%s-%s", config.Role, suffix))
 	if err := os.MkdirAll(workDir, 0o700); err != nil {
 		return "", nil, fmt.Errorf("create workdir: %w", err)
 	}
@@ -118,7 +118,7 @@ func ExecuteAgent(
 	resolvedCommand := substituteVars(config.Command, vars)
 
 	suffix, _ := randomHex(8)
-	logFile := filepath.Join(os.TempDir(), fmt.Sprintf("gityard-agent-%s-%s.log", config.Role, suffix))
+	logFile := filepath.Join(os.TempDir(), fmt.Sprintf("gitcote-agent-%s-%s.log", config.Role, suffix))
 
 	lf, err := os.Create(logFile)
 	if err != nil {

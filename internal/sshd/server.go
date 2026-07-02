@@ -23,8 +23,8 @@ import (
 	"github.com/go-git/go-git/v6/storage/filesystem"
 	gossh "golang.org/x/crypto/ssh"
 
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/sshkeys"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/sshkeys"
 	"github.com/sopranoworks/shoka/pkg/auth"
 )
 
@@ -338,7 +338,7 @@ func loadOrGenerateHostKey(path string) (gossh.Signer, error) {
 		return nil, fmt.Errorf("generate host key: %w", err)
 	}
 
-	block, err := gossh.MarshalPrivateKey(priv, "gityard host key")
+	block, err := gossh.MarshalPrivateKey(priv, "gitcote host key")
 	if err != nil {
 		return nil, fmt.Errorf("marshal host key: %w", err)
 	}

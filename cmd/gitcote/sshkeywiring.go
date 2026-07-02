@@ -5,7 +5,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/sopranoworks/gityard/internal/sshkeys"
+	"github.com/sopranoworks/gitcote/internal/sshkeys"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 )

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sopranoworks/gityard/internal/git"
+	"github.com/sopranoworks/gitcote/internal/git"
 )
 
 func setupBrowseRepo(t *testing.T) (*git.Store, string) {

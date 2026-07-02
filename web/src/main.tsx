@@ -10,8 +10,8 @@ import {
   ToastProvider,
   AdminProvider,
 } from '@shoka/web-core'
-import { AuthGate } from './components/AuthGate'
-import { gityardShellConfig } from './gityardShellConfig'
+import { AuthGate } from '@shoka/web-core'
+import { gitcoteShellConfig } from './gitcoteShellConfig'
 import { App } from './App'
 import './styles/global.css'
 
@@ -30,8 +30,8 @@ createRoot(document.getElementById('root')!).render(
             <EditSignalProvider>
               <AdminProvider>
                 <PaletteProvider>
-                  <ShellProvider value={gityardShellConfig}>
-                    <AuthGate>
+                  <ShellProvider value={gitcoteShellConfig}>
+                    <AuthGate appName="GitCote">
                       <App />
                     </AuthGate>
                   </ShellProvider>

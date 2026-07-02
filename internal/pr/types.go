@@ -1,4 +1,4 @@
-// Package pr implements the pull request system for GitYard.
+// Package pr implements the pull request system for GitCote.
 package pr
 
 import "time"

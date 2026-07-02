@@ -1,13 +1,13 @@
-# Compiled binary (built via `go build -o gityard ./cmd/gityard`)
-/gityard
+# Compiled binary (built via `go build -o gitcote ./cmd/gitcote`)
+/gitcote
 
 # Go test binaries
 *.test
 
 # Local runtime config and data
-/gityard.yaml
+/gitcote.yaml
 /data/
 
 # Frontend
 web/node_modules/
-cmd/gityard/dist/
+cmd/gitcote/dist/

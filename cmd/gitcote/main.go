@@ -1,4 +1,4 @@
-// Command gityard is the GitYard server. It boots the inherited Shoka core —
+// Command gitcote is the GitCote server. It boots the inherited Shoka core —
 // userstore, oauthstore, the OAuth AS, auth middleware + authz gate, /auth/*,
 // /ws/ui — and adds Git hosting via Smart HTTP (clone/fetch/push) using go-git v6
 // (pure Go, no external binary), with MCP tools for project/repo administration.
@@ -24,11 +24,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/go-git/go-git/v6/storage"
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/integrity"
-	"github.com/sopranoworks/gityard/internal/sshd"
-	"github.com/sopranoworks/gityard/internal/sshkeys"
-	"github.com/sopranoworks/gityard/internal/vault"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/integrity"
+	"github.com/sopranoworks/gitcote/internal/sshd"
+	"github.com/sopranoworks/gitcote/internal/sshkeys"
+	"github.com/sopranoworks/gitcote/internal/vault"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/authapi"
 	"github.com/sopranoworks/shoka/pkg/oauth"
@@ -44,12 +44,12 @@ import (
 const version = "0.0.3-step2r"
 
 func main() {
-	showVersion := flag.Bool("version", false, "Print the GitYard version and exit without starting the server.")
-	configPath := flag.String("config", "gityard.yaml", "Path to configuration file")
+	showVersion := flag.Bool("version", false, "Print the GitCote version and exit without starting the server.")
+	configPath := flag.String("config", "gitcote.yaml", "Path to configuration file")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("gityard %s\n", version)
+		fmt.Printf("gitcote %s\n", version)
 		return
 	}
 
@@ -184,7 +184,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	// ---- /auth/* login surface (password + TOTP; WebAuthn deferred) ----
 	authHandler := authapi.New(authapi.Config{
 		Users:              userStore,
-		RPDisplayName:      "GitYard",
+		RPDisplayName:      "GitCote",
 		SessionTTL:         cfg.Server.Auth.Users.SessionTTL.Or(720 * time.Hour),
 		AllowFirstRunAdmin: cfg.Server.Auth.Users.FirstRunAdminAllowed(),
 		Logger:             logger,
@@ -207,16 +207,16 @@ func run(cfg *Config, logger *slog.Logger) error {
 		logger.Info("vault auto-unlocked via config")
 	}
 
-	gityardURL := cfg.Server.HTTP.ExternalURL
-	if gityardURL == "" {
-		gityardURL = "http://" + cfg.Server.HTTP.Listen
+	gitcoteURL := cfg.Server.HTTP.ExternalURL
+	if gitcoteURL == "" {
+		gitcoteURL = "http://" + cfg.Server.HTTP.Listen
 	}
 
 	seedCtx := &seedContext{
 		gitStore:   gitStore,
 		vault:      keyVault,
 		userStore:  userStore,
-		gityardURL: gityardURL,
+		gitcoteURL: gitcoteURL,
 	}
 
 	// ---- Repository integrity check (HEAD hash store) ----
@@ -234,8 +234,8 @@ func run(cfg *Config, logger *slog.Logger) error {
 		integrityHS: integrityHS,
 		oauthStore:  oauthStore,
 		agentCfg:    cfg.AgentSpawn,
-		gityardURL:  agentMCPURL,
-		httpURL:     gityardURL,
+		gitcoteURL:  agentMCPURL,
+		httpURL:     gitcoteURL,
 		seedCtx:     seedCtx,
 		logger:      logger,
 	}
@@ -266,7 +266,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, evtCtx)
 	}
 
-	// ---- /ws/ui user/OAuth management (Shoka core handlers, GitYard ws wrapper) ----
+	// ---- /ws/ui user/OAuth management (Shoka core handlers, GitCote ws wrapper) ----
 	core := &uiws.CoreHandlers{}
 	core.SetUserStore(userStore)
 	if oauthStore != nil {
@@ -322,7 +322,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	// Built-in agent configs are served from go:embed; no disk copy needed.
 
 	// ---- MCP server (Git management tools + server info) ----
-	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, gityardURL, integrityHS, evtCtx, logger)
+	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, gitcoteURL, integrityHS, evtCtx, logger)
 
 	// ---- Seed push scheduler (periodic mode) ----
 	startSeedScheduler(ctx, seedCtx, logger)
@@ -496,20 +496,20 @@ func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, 
 	return authHandler.Middleware(mux)
 }
 
-// setupMCPServer builds the MCP server with GitYard's tool surface: server info,
+// setupMCPServer builds the MCP server with GitCote's tool surface: server info,
 // project/repo management (list_projects).
-func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, gityardURL string, integrityHS *integrity.Store, ec *eventContext, logger *slog.Logger) *mcp.Server {
+func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, gitcoteURL string, integrityHS *integrity.Store, ec *eventContext, logger *slog.Logger) *mcp.Server {
 	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "gityard", Version: version},
+		&mcp.Implementation{Name: "gitcote", Version: version},
 		&mcp.ServerOptions{Logger: logger},
 	)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_server_info",
-		Description: "Get information about the GitYard server (name, version, public URL).",
+		Description: "Get information about the GitCote server (name, version, public URL).",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, _ serverInfoInput) (*mcp.CallToolResult, serverInfoOutput, error) {
 		return nil, serverInfoOutput{
-			Name:        "gityard",
+			Name:        "gitcote",
 			Version:     version,
 			ExternalURL: cfg.Server.HTTP.ExternalURL,
 		}, nil
@@ -530,7 +530,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, gityardUR
 
 	registerPRTools(mcpServer, gitStore, sc, ec)
 	registerRepoTools(mcpServer, gitStore)
-	registerSeedTools(mcpServer, gitStore, sc.vault, gityardURL, ec)
+	registerSeedTools(mcpServer, gitStore, sc.vault, gitcoteURL, ec)
 
 	mcpServer.AddReceivingMiddleware(toolFilterMiddleware())
 
@@ -701,7 +701,7 @@ func buildLogger(cfg LogConfig) (*logDestination, *slog.Logger, error) {
 }
 
 // runServer runs one HTTP listener until ctx is cancelled, then shuts it down
-// gracefully. GitYard terminates no TLS by design (sit behind a TLS-terminating proxy).
+// gracefully. GitCote terminates no TLS by design (sit behind a TLS-terminating proxy).
 func runServer(ctx context.Context, name, addr string, handler http.Handler, logger *slog.Logger) error {
 	srv := &http.Server{Addr: addr, Handler: handler}
 	errChan := make(chan error, 1)

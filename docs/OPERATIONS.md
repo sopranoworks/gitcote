@@ -1,6 +1,6 @@
-# GitYard Operations
+# GitCote Operations
 
-How to build, configure, and run GitYard.
+How to build, configure, and run GitCote.
 
 ## Building
 
@@ -12,11 +12,11 @@ How to build, configure, and run GitYard.
 ### Build steps
 
 ```sh
-go build -o gityard ./cmd/gityard
+go build -o gitcote ./cmd/gitcote
 ```
 
-The frontend is **pre-built and embedded** in the binary (`cmd/gityard/dist/`,
-`cmd/gityard/embed.go`). A plain `go build` produces a working binary with the
+The frontend is **pre-built and embedded** in the binary (`cmd/gitcote/dist/`,
+`cmd/gitcote/embed.go`). A plain `go build` produces a working binary with the
 WebUI included — no separate frontend build step is needed.
 
 If you modify the frontend source in `web/`:
@@ -24,16 +24,16 @@ If you modify the frontend source in `web/`:
 ```sh
 cd web && npm install && npm run build
 cd ..
-go build -o gityard ./cmd/gityard
+go build -o gitcote ./cmd/gitcote
 ```
 
-`npm run build` compiles the TypeScript/React source into `cmd/gityard/dist/`,
+`npm run build` compiles the TypeScript/React source into `cmd/gitcote/dist/`,
 which `go build` then embeds.
 
 ### Version check
 
 ```sh
-./gityard --version
+./gitcote --version
 ```
 
 Prints the version and exits without starting the server.
@@ -41,17 +41,17 @@ Prints the version and exits without starting the server.
 ## Running
 
 ```sh
-./gityard --config gityard.yaml
+./gitcote --config gitcote.yaml
 ```
 
-The `--config` flag defaults to `gityard.yaml`. On startup GitYard creates
+The `--config` flag defaults to `gitcote.yaml`. On startup GitCote creates
 `storage.base_dir` if absent and starts up to three listeners (web, MCP-plain,
 MCP-OAuth).
 
 ## Configuration reference
 
 Configuration is a YAML file. A fully annotated example is
-`gityard.example.yaml` — the canonical reference for every key and its default.
+`gitcote.example.yaml` — the canonical reference for every key and its default.
 The config has **three top-level sections**: `server`, `storage`, and `identity`.
 
 The required keys are `server.http.listen`, `storage.base_dir`, and **at least
@@ -64,7 +64,7 @@ built-in default.
 The config is decoded **strictly**: an unknown key (a typo like `storagee:`) or
 a known key in the wrong block is a **hard load error** that names the offending
 key — the server does not start. Every valid config (including
-`gityard.example.yaml`) is unaffected.
+`gitcote.example.yaml`) is unaffected.
 
 ### `server` — listeners, auth, logging
 
@@ -116,9 +116,9 @@ be set; neither is a startup error.
 1. Build and start:
 
    ```sh
-   go build -o gityard ./cmd/gityard
-   cp gityard.example.yaml gityard.yaml   # edit as needed
-   ./gityard --config gityard.yaml
+   go build -o gitcote ./cmd/gitcote
+   cp gitcote.example.yaml gitcote.yaml   # edit as needed
+   ./gitcote --config gitcote.yaml
    ```
 
 2. Open `http://localhost:8080` in a browser.
@@ -133,20 +133,20 @@ be set; neither is a startup error.
 
 ## Connecting MCP clients
 
-GitYard serves MCP over **Streamable HTTP** at the `/mcp` path of an MCP
+GitCote serves MCP over **Streamable HTTP** at the `/mcp` path of an MCP
 transport's listen address.
 
 **Claude Code** (CLI):
 
 ```sh
-claude mcp add --transport http gityard http://localhost:8081/mcp
+claude mcp add --transport http gitcote http://localhost:8081/mcp
 ```
 
 A non-CLI client (e.g. Claude Desktop) connects through the `mcp-remote`
 bridge — add an `mcpServers` entry that runs
 `npx mcp-remote http://localhost:8081/mcp`.
 
-The `http://localhost:8081/mcp` shown matches `gityard.example.yaml`'s default
+The `http://localhost:8081/mcp` shown matches `gitcote.example.yaml`'s default
 `server.mcp.plain.listen` (`:8081`); substitute your own address.
 
 ## Git hosting
@@ -194,7 +194,7 @@ PRs are then managed via MCP tools: `list_pull_requests`,
 
 ## SSH keys and seed sync
 
-GitYard can push repositories to a **seed** (upstream) repository over SSH.
+GitCote can push repositories to a **seed** (upstream) repository over SSH.
 SSH keys are managed at the **namespace** level (one key serves all projects
 in the namespace), stored encrypted in `<base_dir>/keys.db`.
 
@@ -240,7 +240,7 @@ key is cleared. All seed push is paused until a super-user unlocks it:
 3. Click **Resume** — the vault unlocks and seed push resumes.
 
 This is a deliberate safety step: the operator confirms healthy state before
-resuming push to external seeds. GitYard is a private staging yard, not an
+resuming push to external seeds. GitCote is a private staging yard, not an
 unattended public service.
 
 ### Sync status
@@ -256,7 +256,7 @@ Each project shows a **sync status badge** in the management screen:
 
 ## Enabling OAuth (MCP)
 
-GitYard includes a built-in **OAuth 2.1 authorization server**. It is active
+GitCote includes a built-in **OAuth 2.1 authorization server**. It is active
 when `server.mcp.oauth.listen` is set — its presence is the switch.
 
 ```yaml
@@ -270,8 +270,8 @@ server:
 
 ### Prerequisites
 
-- A **TLS-terminating reverse proxy** in front of GitYard (OAuth requires
-  HTTPS; GitYard terminates no TLS).
+- A **TLS-terminating reverse proxy** in front of GitCote (OAuth requires
+  HTTPS; GitCote terminates no TLS).
 - `server.mcp.oauth.external_url` set to the public origin.
 
 ### Registration modes
@@ -288,7 +288,7 @@ static-bearer / unauthenticated path.
 
 ## MCP tools reference
 
-GitYard exposes **17 MCP tools** over Streamable HTTP at `/mcp`:
+GitCote exposes **17 MCP tools** over Streamable HTTP at `/mcp`:
 
 ### Server
 
@@ -334,7 +334,7 @@ GitYard exposes **17 MCP tools** over Streamable HTTP at `/mcp`:
 
 ## TLS
 
-**GitYard terminates no TLS — by design.** It speaks plain HTTP on every
+**GitCote terminates no TLS — by design.** It speaks plain HTTP on every
 listener and delegates TLS to an external TLS-terminating reverse proxy
 (nginx, Caddy, etc.). There are no `tls` fields in the configuration.
 

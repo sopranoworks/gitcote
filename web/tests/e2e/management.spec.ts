@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 
-const PORT = Number(process.env.GITYARD_E2E_PORT ?? 9099)
+const PORT = Number(process.env.GITCOTE_E2E_PORT ?? 9099)
 
 async function loginAsAdmin(page: Page) {
   const status = await page.request.get(`http://localhost:${PORT}/auth/status`)

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/integrity"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/integrity"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 )
 
@@ -139,7 +139,7 @@ func runCheck(ctx context.Context, gitStore *git.Store, hs *integrity.Store, sta
 }
 
 // recordHeadHash stores the current HEAD hash for a repository.
-// Called after every GitYard-mediated write (merge, push, seed pull).
+// Called after every GitCote-mediated write (merge, push, seed pull).
 func recordHeadHash(gitStore *git.Store, namespace, project string) {
 	if headStore == nil {
 		return

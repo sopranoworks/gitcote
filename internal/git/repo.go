@@ -1,5 +1,5 @@
 // Package git provides Git repository management and Smart HTTP transport
-// for GitYard using go-git v6 (pure Go, no external binary).
+// for GitCote using go-git v6 (pure Go, no external binary).
 // Repositories use a non-bare layout (<base_dir>/<namespace>/<project>/.git/)
 // matching Shoka's storage conventions.
 package git

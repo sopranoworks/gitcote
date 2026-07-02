@@ -1,8 +1,8 @@
-# GitYard
+# GitCote
 
-GitYard is an agent-oriented Git staging yard — a private intermediary between
-coding agents and seed (master) repositories. Agents push work to GitYard over
-Smart HTTP; an operator reviews and approves pull requests; GitYard pushes
+GitCote is an agent-oriented Git staging yard — a private intermediary between
+coding agents and seed (master) repositories. Agents push work to GitCote over
+Smart HTTP; an operator reviews and approves pull requests; GitCote pushes
 approved changes onward to the seed repository via SSH. Built on
 [Shoka](https://github.com/sopranoworks/shoka)'s core (OAuth, MCP, user
 management, namespace isolation). Pure Go — no external Git binary.
@@ -33,12 +33,12 @@ Repositories are isolated on the filesystem as `<base_dir>/<namespace>/<project>
 
 ## Quick start
 
-GitYard is a Go program. Build it and run it against a config file:
+GitCote is a Go program. Build it and run it against a config file:
 
 ```sh
-go build -o gityard ./cmd/gityard
-cp gityard.example.yaml gityard.yaml      # then edit as needed
-./gityard --config gityard.yaml
+go build -o gitcote ./cmd/gitcote
+cp gitcote.example.yaml gitcote.yaml      # then edit as needed
+./gitcote --config gitcote.yaml
 ```
 
 Minimal config (required fields only):
@@ -59,7 +59,7 @@ administrator account. Point an MCP client at the `/mcp` path on the MCP
 listener:
 
 ```sh
-claude mcp add --transport http gityard http://localhost:8081/mcp
+claude mcp add --transport http gitcote http://localhost:8081/mcp
 ```
 
 The frontend is **pre-built and embedded** in the Go binary — `go build` alone
@@ -68,10 +68,10 @@ source (`web/`), rebuild it first: `cd web && npm install && npm run build`, the
 re-run `go build`.
 
 Authentication is **off** by default (single-operator local mode). See
-`gityard.example.yaml` for the full annotated configuration (auth, OAuth,
+`gitcote.example.yaml` for the full annotated configuration (auth, OAuth,
 logging).
 
-**TLS is outsourced — by design.** GitYard terminates no TLS. Run it behind an
+**TLS is outsourced — by design.** GitCote terminates no TLS. Run it behind an
 external TLS-terminating reverse proxy (nginx, etc.).
 
 ## Documentation
@@ -93,7 +93,7 @@ React + [@shoka/web-core](https://github.com/sopranoworks/shoka) (frontend).
 
 ## Version
 
-This is **0.0.3-step2r**. The running binary reports it via `gityard --version`,
+This is **0.0.3-step2r**. The running binary reports it via `gitcote --version`,
 and the MCP server advertises it in `get_server_info`.
 
 ## License

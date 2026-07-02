@@ -4,7 +4,7 @@
 #
 # Usage (local):   ./scripts/e2e-full-flow.sh
 # Usage (Docker):  docker run --rm -v "$(dirname $(pwd)):/work-src" \
-#                    -w /work-src/gityard -e GOFLAGS=-buildvcs=false \
+#                    -w /work-src/gitcote -e GOFLAGS=-buildvcs=false \
 #                    golang:1.26 ./scripts/e2e-full-flow.sh
 set -euo pipefail
 
@@ -34,10 +34,10 @@ echo "temp dir: $E2E_DIR"
 echo ""
 echo "--- Step 1: Building binaries ---"
 cd "$REPO_DIR"
-go build -o "$BUILD_DIR/gityard"        ./cmd/gityard
+go build -o "$BUILD_DIR/gitcote"        ./cmd/gitcote
 go build -o "$BUILD_DIR/mock-reviewer"  ./cmd/mock-reviewer
 go build -o "$BUILD_DIR/e2e-helper"     ./cmd/e2e-helper
-echo "built: gityard, mock-reviewer, e2e-helper"
+echo "built: gitcote, mock-reviewer, e2e-helper"
 
 # ---- Step 2: Setup (repo + bbolt settings) ----
 echo ""
@@ -63,7 +63,7 @@ echo "wrote $AGENTS_DIR/mock_reviewer/agent.yaml"
 # ---- Step 4: Write server config ----
 echo ""
 echo "--- Step 4: Server config ---"
-cat > "$E2E_DIR/gityard.yaml" <<YAML
+cat > "$E2E_DIR/gitcote.yaml" <<YAML
 server:
   http:
     listen: "127.0.0.1:$HTTP_PORT"
@@ -93,12 +93,12 @@ agent_spawn:
   agents_root: "$AGENTS_DIR"
   default_timeout: "2m"
 YAML
-echo "wrote $E2E_DIR/gityard.yaml"
+echo "wrote $E2E_DIR/gitcote.yaml"
 
 # ---- Step 5: Start server ----
 echo ""
 echo "--- Step 5: Starting server ---"
-"$BUILD_DIR/gityard" --config "$E2E_DIR/gityard.yaml" &
+"$BUILD_DIR/gitcote" --config "$E2E_DIR/gitcote.yaml" &
 SERVER_PID=$!
 echo "server PID=$SERVER_PID"
 
@@ -179,8 +179,8 @@ if [ "$MERGED" != "true" ]; then
   echo ""
   echo "FAIL: PR was not merged within 120 seconds"
   echo "agent log files:"
-  ls -la /tmp/gityard-agent-* 2>/dev/null || echo "  (none)"
-  for f in /tmp/gityard-agent-*; do
+  ls -la /tmp/gitcote-agent-* 2>/dev/null || echo "  (none)"
+  for f in /tmp/gitcote-agent-*; do
     [ -f "$f" ] && echo "--- $f ---" && cat "$f" 2>/dev/null
   done
   # Stop server so bbolt check can open the database

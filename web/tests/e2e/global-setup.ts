@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..', '..', '..') // web/tests/e2e -> repo root
-const PORT = Number(process.env.GITYARD_E2E_PORT ?? 9099)
+const PORT = Number(process.env.GITCOTE_E2E_PORT ?? 9099)
 const MCP_PORT = PORT - 1
 
 async function waitForHttp(url: string, timeoutMs = 20000): Promise<void> {
@@ -27,10 +27,10 @@ let server: ChildProcess | null = null
 let dataDir = ''
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
-  const binPath = join(tmpdir(), 'gityard-e2e-bin')
-  const mockReviewerBin = join(tmpdir(), 'gityard-e2e-mock-reviewer')
-  const mockRejectorBin = join(tmpdir(), 'gityard-e2e-mock-rejector')
-  execFileSync('go', ['build', '-o', binPath, './cmd/gityard'], {
+  const binPath = join(tmpdir(), 'gitcote-e2e-bin')
+  const mockReviewerBin = join(tmpdir(), 'gitcote-e2e-mock-reviewer')
+  const mockRejectorBin = join(tmpdir(), 'gitcote-e2e-mock-rejector')
+  execFileSync('go', ['build', '-o', binPath, './cmd/gitcote'], {
     cwd: repoRoot,
     stdio: 'inherit',
   })
@@ -43,8 +43,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     stdio: 'inherit',
   })
 
-  dataDir = mkdtempSync(join(tmpdir(), 'gityard-e2e-data-'))
-  const cfgPath = join(dataDir, 'gityard.yaml')
+  dataDir = mkdtempSync(join(tmpdir(), 'gitcote-e2e-data-'))
+  const cfgPath = join(dataDir, 'gitcote.yaml')
   const oauthPort = PORT - 2
 
   const agentsDir = join(dataDir, 'agents')

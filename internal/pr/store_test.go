@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sopranoworks/gityard/internal/pr"
+	"github.com/sopranoworks/gitcote/internal/pr"
 )
 
 func TestStoreCreateAndGet(t *testing.T) {

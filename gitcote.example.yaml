@@ -1,12 +1,12 @@
-# GitYard example configuration.
+# GitCote example configuration.
 #
-# Copy to gityard.yaml (or pass via --config) and adjust:
-#     ./gityard --config gityard.example.yaml
+# Copy to gitcote.yaml (or pass via --config) and adjust:
+#     ./gitcote --config gitcote.example.yaml
 #
 # REQUIRED: server.http.listen, storage.base_dir, and at least one MCP transport
 # (server.mcp.plain.listen or server.mcp.oauth.listen). Everything else is optional.
 #
-# GitYard terminates NO TLS by design — put every port behind a TLS-terminating
+# GitCote terminates NO TLS by design — put every port behind a TLS-terminating
 # reverse proxy.
 
 server:
@@ -33,7 +33,7 @@ server:
   # ssh:
   #   listen: ":2222"
   #   host_key_path: "ssh_host_ed25519_key"  # relative to storage.base_dir
-  #   external_url: "gityard.internal"        # hostname for SSH clone URLs
+  #   external_url: "gitcote.internal"        # hostname for SSH clone URLs
 
   # MCP endpoint (Streamable HTTP, served at /mcp). At least one transport must be set.
   mcp:
@@ -78,7 +78,7 @@ server:
     output: "stderr"  # stderr (default) | file
     # When output: file, the file is BOUNDED (it never grows forever):
     # file:
-    #   path: /var/log/gityard/gityard.log  # required; parent dirs created
+    #   path: /var/log/gitcote/gitcote.log  # required; parent dirs created
     #   max_size_mb: 100      # rotate the active file past this size (0 => 100)
     #   max_backups: 7        # rotated backups kept (0 => 7)
     #   max_age_days: 30      # days rotated backups kept (0 => 30)
@@ -107,13 +107,13 @@ server:
 # to review PRs, fix rejected code, and resolve merge conflicts.
 agent_spawn:
   enabled: true
-  # agents_root: /etc/gityard/agents   # optional: where user agent.yaml dirs live
+  # agents_root: /etc/gitcote/agents   # optional: where user agent.yaml dirs live
   #                                     # (default: unset — built-in agents only)
   default_timeout: "30m"                 # hard timeout: kill agent after this
   retain_workdir: false                  # keep workdir after completion (debugging)
 
 storage:
-  base_dir: "~/.gityard"
+  base_dir: "~/.gitcote"
 
 # The single operator principal bound onto issued OAuth tokens.
 identity:

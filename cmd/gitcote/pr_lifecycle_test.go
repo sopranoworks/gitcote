@@ -10,8 +10,8 @@ import (
 	gogit "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/pr"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/pr"
 )
 
 func TestEmptyRepoPRLifecycle(t *testing.T) {
@@ -176,7 +176,7 @@ func TestEmptyRepoPRLifecycle(t *testing.T) {
 	}
 
 	msg := fmt.Sprintf("Merge PR #%d: %s", pr2.Number, pr2.Title)
-	mergeHash, err := git.MergeCommitFromTree(repo, mergeResult2.TreeHash, targetHash2, feat2Hash, msg, "GitYard", "gityard@localhost")
+	mergeHash, err := git.MergeCommitFromTree(repo, mergeResult2.TreeHash, targetHash2, feat2Hash, msg, "GitCote", "gitcote@localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestEmptyRepoConcurrentPRsNoConflict(t *testing.T) {
 	}
 
 	mergeHash, err := git.MergeCommitFromTree(repo, mergeResult.TreeHash, mainHash, featBHash,
-		fmt.Sprintf("Merge PR #%d", numB), "GitYard", "gityard@localhost")
+		fmt.Sprintf("Merge PR #%d", numB), "GitCote", "gitcote@localhost")
 	if err != nil {
 		t.Fatal(err)
 	}

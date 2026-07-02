@@ -12,10 +12,10 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sopranoworks/gityard/internal/agent"
-	"github.com/sopranoworks/gityard/internal/git"
-	"github.com/sopranoworks/gityard/internal/integrity"
-	"github.com/sopranoworks/gityard/internal/pr"
+	"github.com/sopranoworks/gitcote/internal/agent"
+	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/integrity"
+	"github.com/sopranoworks/gitcote/internal/pr"
 	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/uiws"
@@ -1102,7 +1102,7 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 		}
 	} else {
 		msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", pullReq.Number, pullReq.Title, pullReq.SourceBranch, pullReq.TargetBranch)
-		mergeHash, err = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitYard", "gityard@localhost")
+		mergeHash, err = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitCote", "gitcote@localhost")
 		if err != nil {
 			c.SendError(fmt.Sprintf("create merge commit: %v", err))
 			return
@@ -1368,7 +1368,7 @@ func operatorRejectPR(gitStore *git.Store, ec *eventContext, ns, proj string, pr
 	releasePRSlotAndDequeue(ec, ns, proj, int(pullReq.Number))
 
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "[GitYard] PR rejected by operator: %s/%s PR #%d", ns, proj, pullReq.Number)
+	fmt.Fprintf(&msg, "[GitCote] PR rejected by operator: %s/%s PR #%d", ns, proj, pullReq.Number)
 	if reason != "" {
 		fmt.Fprintf(&msg, "\nReason: %s", reason)
 	}

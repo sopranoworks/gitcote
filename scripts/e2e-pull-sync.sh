@@ -6,7 +6,7 @@
 #
 # Usage (local):   ./scripts/e2e-pull-sync.sh
 # Usage (Docker):  docker run --rm -v "$(dirname $(pwd)):/work-src" \
-#                    -w /work-src/gityard -e GOFLAGS=-buildvcs=false \
+#                    -w /work-src/gitcote -e GOFLAGS=-buildvcs=false \
 #                    golang:1.26 ./scripts/e2e-pull-sync.sh
 set -euo pipefail
 
@@ -29,7 +29,7 @@ cleanup() {
         cat "$LOG_DIR/server.log" 2>/dev/null || echo "(no server log)"
         echo ""
         echo "=== AGENT LOGS ==="
-        for f in /tmp/gityard-agent-*; do
+        for f in /tmp/gitcote-agent-*; do
             [ -f "$f" ] && echo "--- $f ---" && cat "$f" 2>/dev/null
         done
     fi
@@ -69,16 +69,16 @@ echo "temp dir: $E2E_DIR"
 echo ""
 echo "--- Step 1: Building binaries ---"
 cd "$REPO_DIR"
-go build -o "$BUILD_DIR/gityard"       ./cmd/gityard
+go build -o "$BUILD_DIR/gitcote"       ./cmd/gitcote
 go build -o "$BUILD_DIR/mock-reviewer" ./cmd/mock-reviewer
 go build -o "$BUILD_DIR/e2e-helper"    ./cmd/e2e-helper
-echo "built: gityard, mock-reviewer, e2e-helper"
+echo "built: gitcote, mock-reviewer, e2e-helper"
 
 start_server() {
     local proj=$1
     local data_dir=$2
 
-    cat > "$E2E_DIR/gityard.yaml" <<YAML
+    cat > "$E2E_DIR/gitcote.yaml" <<YAML
 server:
   http:
     listen: "127.0.0.1:$HTTP_PORT"
@@ -113,7 +113,7 @@ agent_spawn:
   default_timeout: "3m"
 YAML
 
-    "$BUILD_DIR/gityard" --config "$E2E_DIR/gityard.yaml" > "$LOG_DIR/server.log" 2>&1 &
+    "$BUILD_DIR/gitcote" --config "$E2E_DIR/gitcote.yaml" > "$LOG_DIR/server.log" 2>&1 &
     SERVER_PID=$!
     echo "server PID=$SERVER_PID"
 
@@ -251,8 +251,8 @@ cd "$REPO_DIR"
 rm -rf "$TMP_SEED_WORK"
 echo "seed repo created with initial commit"
 
-# Setup GitYard project with seed
-echo "--- A.2: Setup GitYard project ---"
+# Setup GitCote project with seed
+echo "--- A.2: Setup GitCote project ---"
 "$BUILD_DIR/e2e-helper" --setup-seed \
   --base-dir="$DATA_A" \
   --ns="$NS" \
@@ -307,14 +307,14 @@ else
     fail "Test A: expected fast-forward or up-to-date"
 fi
 
-# Verify GitYard main updated
+# Verify GitCote main updated
 cd "$CLONE_A/repo"
 git fetch origin main 2>/dev/null
 git checkout origin/main 2>/dev/null || git checkout FETCH_HEAD 2>/dev/null
 if [ -f "file2.txt" ]; then
-    echo "PASS: file2.txt present on GitYard main"
+    echo "PASS: file2.txt present on GitCote main"
 else
-    fail "Test A: file2.txt not found on GitYard main after pull"
+    fail "Test A: file2.txt not found on GitCote main after pull"
 fi
 cd "$REPO_DIR"
 
@@ -367,9 +367,9 @@ agent:
     cd "$TEMP_CLONE_DIR" && \
     git config user.email "e2e@test.local" && \
     git config user.name "E2E Test" && \
-    git fetch gityard main 2>&1 && \
-    git merge gityard/main --no-edit -X ours -m "Merge seed sync conflict resolution" 2>&1 && \
-    git push gityard HEAD:main 2>&1
+    git fetch gitcote main 2>&1 && \
+    git merge gitcote/main --no-edit -X ours -m "Merge seed sync conflict resolution" 2>&1 && \
+    git push gitcote HEAD:main 2>&1
   prompt: "Resolve seed sync conflicts"
 YAML
 echo "wrote mock_seed_merger config"
@@ -393,7 +393,7 @@ echo "MCP session: $SESSION_ID"
 
 mcp_pull_from_seed "$NS" "$PROJ_B" "$SESSION_ID" 2 > /dev/null
 
-# Create divergence: push different changes to seed and GitYard
+# Create divergence: push different changes to seed and GitCote
 echo "--- B.5: Create divergence ---"
 
 # Push conflicting change to seed
@@ -409,15 +409,15 @@ cd "$REPO_DIR"
 rm -rf "$TMP_SEED_WORK"
 echo "pushed conflicting change to seed"
 
-# Push different change to GitYard main (direct repo write)
+# Push different change to GitCote main (direct repo write)
 REPO_DATA_DIR="$DATA_B/$NS/$PROJ_B"
 cd "$REPO_DATA_DIR"
-echo 'gityard change' > shared.txt
-echo 'gityard-only file' > gityard_file.txt
+echo 'gitcote change' > shared.txt
+echo 'gitcote-only file' > gitcote_file.txt
 git add -A
-git commit -m "gityard: modify shared.txt + add gityard_file.txt" 2>&1
+git commit -m "gitcote: modify shared.txt + add gitcote_file.txt" 2>&1
 cd "$REPO_DIR"
-echo "pushed conflicting change to GitYard main"
+echo "pushed conflicting change to GitCote main"
 
 # Trigger pull — should detect conflict and spawn merger agent
 echo "--- B.6: Trigger pull (expect conflict + agent resolution) ---"
@@ -442,9 +442,9 @@ git clone "$GIT_URL" "$CLONE_B/repo" 2>&1
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   cd "$CLONE_B/repo"
   git fetch origin main 2>/dev/null || true
-  # Check if main has both seed_file.txt and gityard_file.txt
+  # Check if main has both seed_file.txt and gitcote_file.txt
   if git show origin/main:seed_file.txt >/dev/null 2>&1 && \
-     git show origin/main:gityard_file.txt >/dev/null 2>&1; then
+     git show origin/main:gitcote_file.txt >/dev/null 2>&1; then
     RESOLVED=true
     echo "Merger agent resolved conflict (after ${ELAPSED}s)"
     break
@@ -462,7 +462,7 @@ cd "$REPO_DIR"
 if [ "$RESOLVED" != "true" ]; then
     echo ""
     echo "Agent logs:"
-    for f in /tmp/gityard-agent-merger-*; do
+    for f in /tmp/gitcote-agent-merger-*; do
         [ -f "$f" ] && echo "--- $f ---" && cat "$f" 2>/dev/null
     done
     fail "Test B: merger agent did not resolve conflict within ${TIMEOUT}s"
@@ -479,10 +479,10 @@ else
     fail "Test B: seed_file.txt missing from main"
 fi
 
-if [ -f "gityard_file.txt" ]; then
-    echo "PASS: gityard_file.txt present on main"
+if [ -f "gitcote_file.txt" ]; then
+    echo "PASS: gitcote_file.txt present on main"
 else
-    fail "Test B: gityard_file.txt missing from main"
+    fail "Test B: gitcote_file.txt missing from main"
 fi
 cd "$REPO_DIR"
 

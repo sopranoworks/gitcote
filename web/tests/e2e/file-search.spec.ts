@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 
-const PORT = Number(process.env.GITYARD_E2E_PORT ?? 9099)
-const SCREENSHOT_DIR = '/tmp/gityard-e2e-screenshots'
+const PORT = Number(process.env.GITCOTE_E2E_PORT ?? 9099)
+const SCREENSHOT_DIR = '/tmp/gitcote-e2e-screenshots'
 mkdirSync(SCREENSHOT_DIR, { recursive: true })
 
 async function screenshot(page: Page, name: string) {
@@ -85,7 +85,7 @@ const ns = 'searchns'
 const proj = 'searchproj'
 
 function pushTestFiles(token: string) {
-  const tmp = mkdtempSync(join(tmpdir(), 'gityard-search-'))
+  const tmp = mkdtempSync(join(tmpdir(), 'gitcote-search-'))
   const url = `http://oauth2:${token}@localhost:${PORT}/${ns}/${proj}.git`
   git(tmp, 'clone', url, 'repo')
   const repo = join(tmp, 'repo')
@@ -138,7 +138,7 @@ test.describe('File view & search', () => {
     await page.goto(`/p/${ns}/${proj}/blob/hello.ts`)
     await expect(page.locator('[data-testid="copy-path-button"]')).toBeVisible({ timeout: 10000 })
     await page.locator('[data-testid="copy-path-button"]').click({ force: true })
-    await screenshot(page, 'gityard-file-copy-button.png')
+    await screenshot(page, 'gitcote-file-copy-button.png')
   })
 
   test('in-view search finds content in a repo file', async ({ page }) => {
@@ -153,7 +153,7 @@ test.describe('File view & search', () => {
 
     await expect(page.getByRole('button', { name: 'Next match' })).toBeEnabled({ timeout: 5000 })
 
-    await screenshot(page, 'gityard-file-search-active.png')
+    await screenshot(page, 'gitcote-file-search-active.png')
   })
 
   test('sidebar content search returns results with snippets', async ({ page }) => {
@@ -173,7 +173,7 @@ test.describe('File view & search', () => {
     const resultItem = page.locator('#sidebar button', { hasText: 'hello.ts' })
     await expect(resultItem).toBeVisible({ timeout: 10000 })
 
-    await screenshot(page, 'gityard-sidebar-search-results.png')
+    await screenshot(page, 'gitcote-sidebar-search-results.png')
   })
 
   test('click sidebar result → file loads → in-view search populated', async ({ page }) => {
@@ -200,6 +200,6 @@ test.describe('File view & search', () => {
     await expect(findInput).toBeVisible({ timeout: 5000 })
     await expect(findInput).toHaveValue('uniqueMarkerAlpha', { timeout: 5000 })
 
-    await screenshot(page, 'gityard-sidebar-search-to-view.png')
+    await screenshot(page, 'gitcote-sidebar-search-to-view.png')
   })
 })

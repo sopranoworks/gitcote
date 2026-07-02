@@ -29,7 +29,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	outDir := "cmd/gityard/dist"
+	outDir := "cmd/gitcote/dist"
 	if err := os.RemoveAll(outDir); err != nil {
 		fmt.Fprintf(os.Stderr, "clean %s: %v\n", outDir, err)
 		os.Exit(1)
@@ -198,7 +198,7 @@ func writeIndexHTML(metaJSON, outDir string) error {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
-    <title>GitYard</title>
+    <title>GitCote</title>
     <script type="module" crossorigin src="%s"></script>%s
   </head>
   <body>

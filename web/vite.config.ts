@@ -21,7 +21,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../cmd/gityard/dist',
+    outDir: '../cmd/gitcote/dist',
     emptyOutDir: true,
   },
   server: {
