@@ -200,6 +200,13 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 	defer func() { _ = keyVault.Close() }()
 
+	if cfg.Storage.VaultPassword != "" {
+		if err := keyVault.Unlock(cfg.Storage.VaultPassword); err != nil {
+			return fmt.Errorf("auto-unlock vault: %w", err)
+		}
+		logger.Info("vault auto-unlocked via config")
+	}
+
 	gityardURL := cfg.Server.HTTP.ExternalURL
 	if gityardURL == "" {
 		gityardURL = "http://" + cfg.Server.HTTP.Listen

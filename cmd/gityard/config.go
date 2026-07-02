@@ -103,7 +103,8 @@ func (u UsersConfig) FirstRunAdminAllowed() bool {
 }
 
 type StorageConfig struct {
-	BaseDir string `yaml:"base_dir"`
+	BaseDir       string `yaml:"base_dir"`
+	VaultPassword string `yaml:"vault_password"`
 }
 
 // IdentityConfig is the single operator principal bound onto issued OAuth tokens
