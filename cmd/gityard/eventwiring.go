@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -748,6 +749,257 @@ func onPRMergeConflict(ec *eventContext, p *pr.PullRequest) {
 	if action.NotifyEnabled {
 		go notify(action.NotifyMethod, fmt.Sprintf("PR #%d has merge conflicts", p.Number), p.RepoNamespace, p.RepoProject, p.Number, ec.logger)
 	}
+}
+
+// --- Seed Sync Agent Spawn ---
+
+// onSeedPullConflict fires when a seed pull detects conflicts.
+func onSeedPullConflict(ec *eventContext, ns, proj, tempDir string, conflictFiles []string) {
+	if ec.integrityHS == nil {
+		return
+	}
+	global, _ := ec.integrityHS.GetGlobalSeedEventSettings()
+	project, _ := ec.integrityHS.GetProjectSeedEventSettings(ns, proj)
+
+	var globalAction, projectAction *integrity.EventAction
+	if global != nil {
+		globalAction = global.OnPullConflict
+	}
+	if project != nil {
+		projectAction = project.OnPullConflict
+	}
+
+	action := integrity.ResolveEventAction(projectAction, globalAction)
+	if action.AgentEnabled {
+		go spawnAgentForSeedSync(ec, action, ns, proj, tempDir, conflictFiles)
+	}
+}
+
+// spawnAgentForSeedSync finds the appropriate merger agent and executes it for seed sync conflict resolution.
+func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventAction, ns, proj, tempDir string, conflictFiles []string) {
+	if !ec.agentCfg.IsEnabled() {
+		return
+	}
+
+	agentsRoot := ec.agentCfg.EffectiveAgentsRoot()
+	configs, err := agent.ScanAgentConfigs(agentsRoot)
+	if err != nil {
+		ec.logger.Error("scan agent configs for seed sync", "error", err)
+		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		return
+	}
+
+	var ac *agent.AgentConfig
+	if action.AgentName != "" {
+		ac = configs.FindByName(action.AgentName)
+	}
+	if ac == nil {
+		byRole := configs.FindByRole("merger")
+		if len(byRole) > 0 {
+			ac = byRole[0]
+		}
+	}
+	if ac == nil {
+		ec.logger.Warn("no agent config found for seed sync merger", "agent_name", action.AgentName)
+		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		return
+	}
+
+	maxAttempts := 1
+	if action.AutoRetry && action.MaxRetries > 0 {
+		maxAttempts = action.MaxRetries + 1
+	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			ec.logger.Warn("seed sync agent retry", "attempt", attempt+1, "ns", ns, "proj", proj)
+		}
+
+		ensureNoActiveToken(ec, ns, proj, 0)
+
+		result := executeAgentForSeedSync(ec, ac, ns, proj, tempDir, conflictFiles)
+		if result != nil && result.ExitCode == 0 {
+			verifySeedSyncAfterAgent(ec, ns, proj, tempDir)
+			return
+		}
+
+		if attempt < maxAttempts-1 {
+			continue
+		}
+
+		detail := "agent failed"
+		if result != nil {
+			detail = fmt.Sprintf("exit code %d", result.ExitCode)
+			if result.Killed {
+				detail = result.KillReason
+			}
+		}
+		if action.AutoRetry && action.MaxRetries > 0 {
+			detail = fmt.Sprintf("seed sync agent failed after %d retries: %s", action.MaxRetries, detail)
+		}
+
+		ec.logger.Error("seed sync agent failed", "ns", ns, "proj", proj, "detail", detail)
+		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+	}
+}
+
+func executeAgentForSeedSync(ec *eventContext, ac *agent.AgentConfig, ns, proj, tempDir string, conflictFiles []string) *agent.SpawnResult {
+	spawnCtx := &agent.SpawnContext{
+		Namespace:     ns,
+		Project:       proj,
+		TempCloneDir:  tempDir,
+		ConflictFiles: strings.Join(conflictFiles, ","),
+	}
+
+	if ec.httpURL != "" {
+		spawnCtx.GitURL = strings.TrimSuffix(ec.httpURL, "/") + "/" + ns + "/" + proj + ".git"
+	}
+
+	token, terr := issueAgentToken(ec, ns, proj, 0, "", ac.DirName, "merger")
+	if terr != nil {
+		ec.logger.Error("issue agent token for seed sync", "error", terr, "ns", ns, "proj", proj)
+	}
+	if token != "" {
+		spawnCtx.Token = token
+	}
+
+	workDir, cleanup, err := agent.PrepareWorkDir(ac, spawnCtx)
+	if err != nil {
+		ec.logger.Error("prepare workdir for seed sync agent", "error", err, "ns", ns, "proj", proj)
+		revokeAgentToken(ec, ns, proj, 0, true)
+		return nil
+	}
+
+	if ec.gityardURL != "" {
+		mcpURL := strings.TrimSuffix(ec.gityardURL, "/") + "/mcp"
+		entry := agent.MCPServerEntry{Type: "http", URL: mcpURL}
+		if token != "" {
+			entry.Headers = map[string]string{"Authorization": "Bearer " + token}
+		}
+		if werr := agent.WriteMCPConfig(workDir, map[string]agent.MCPServerEntry{
+			"gityard": entry,
+		}); werr != nil {
+			ec.logger.Error("write mcp config for seed sync", "error", werr, "ns", ns, "proj", proj)
+		}
+	}
+
+	if ec.integrityHS != nil {
+		_ = ec.integrityHS.AddAgentWorkdir(integrity.AgentWorkdirRecord{
+			Path:      workDir,
+			AgentName: ac.DirName,
+			Role:      ac.Role,
+			Namespace: ns,
+			Project:   proj,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			Status:    "running",
+		})
+	}
+
+	if spawnCtx.Token != "" {
+		RegisterAgentToken(spawnCtx.Token)
+	}
+
+	result := executeWithActivityTimeout(ec, ac, spawnCtx, workDir)
+
+	if spawnCtx.Token != "" {
+		UnregisterAgentToken(spawnCtx.Token)
+	}
+
+	status := "completed"
+	if result.ExitCode != 0 {
+		status = "failed"
+	}
+	if result.Killed {
+		status = "killed"
+	}
+
+	if result.ExitCode == 0 {
+		revokeAgentToken(ec, ns, proj, 0, true)
+		if !ec.agentCfg.RetainWorkdir {
+			cleanup()
+			if ec.integrityHS != nil {
+				_ = ec.integrityHS.RemoveAgentWorkdir(workDir)
+			}
+		}
+	} else {
+		revokeAgentToken(ec, ns, proj, 0, false)
+		if ec.integrityHS != nil {
+			_ = ec.integrityHS.UpdateAgentWorkdir(workDir, status, result.ExitCode)
+		}
+	}
+
+	return result
+}
+
+// verifySeedSyncAfterAgent checks if the merger agent successfully updated main.
+func verifySeedSyncAfterAgent(ec *eventContext, ns, proj, tempDir string) {
+	repo, err := ec.gitStore.OpenRepo(ns, proj)
+	if err != nil {
+		ec.logger.Warn("verify seed sync: open repo", "error", err, "ns", ns, "proj", proj)
+		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		return
+	}
+
+	mainHash, err := git.ResolveBranch(repo, "main")
+	if err != nil {
+		ec.logger.Warn("verify seed sync: resolve main", "error", err, "ns", ns, "proj", proj)
+		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		return
+	}
+
+	seedRef, err := repo.Reference(plumbing.ReferenceName("refs/remotes/seed/main"), true)
+	if err != nil {
+		ec.logger.Info("verify seed sync: no seed remote ref, assuming agent pushed", "ns", ns, "proj", proj)
+		cleanupTempCloneDir(ec, tempDir)
+		updateSeedSyncState(ec.gitStore, ns, proj, "idle")
+		ec.logger.Info("seed sync: agent resolved conflict successfully", "ns", ns, "proj", proj, "main", mainHash.String()[:8])
+		return
+	}
+
+	seedHash := seedRef.Hash()
+	seedCommit, err := repo.CommitObject(seedHash)
+	if err != nil {
+		ec.logger.Warn("verify seed sync: resolve seed commit", "error", err)
+		cleanupTempCloneDir(ec, tempDir)
+		updateSeedSyncState(ec.gitStore, ns, proj, "idle")
+		return
+	}
+
+	mainCommit, err := repo.CommitObject(mainHash)
+	if err != nil {
+		ec.logger.Warn("verify seed sync: resolve main commit", "error", err)
+		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		return
+	}
+
+	isSeedAncestor, _ := seedCommit.IsAncestor(mainCommit)
+	if isSeedAncestor {
+		cleanupTempCloneDir(ec, tempDir)
+		updateSeedSyncState(ec.gitStore, ns, proj, "idle")
+		ec.logger.Info("seed sync: agent resolved conflict, main contains seed changes",
+			"ns", ns, "proj", proj, "main", mainHash.String()[:8])
+	} else {
+		ec.logger.Warn("seed sync: agent succeeded but main does not contain seed changes",
+			"ns", ns, "proj", proj)
+		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+	}
+}
+
+func cleanupTempCloneDir(ec *eventContext, tempDir string) {
+	if err := os.RemoveAll(tempDir); err != nil {
+		ec.logger.Warn("cleanup temp clone", "error", err, "path", tempDir)
+	}
+	if ec.integrityHS != nil {
+		_ = ec.integrityHS.RemoveTempClone(tempDir)
+	}
+}
+
+func updateSeedSyncState(gitStore *git.Store, ns, proj, state string) {
+	projPath, err := gitStore.ProjectPath(ns, proj)
+	if err != nil {
+		return
+	}
+	_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{State: state})
 }
 
 // --- Event Settings WebSocket Handlers ---

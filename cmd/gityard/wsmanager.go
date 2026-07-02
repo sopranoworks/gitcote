@@ -142,7 +142,7 @@ func (m *wsManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if seedDispatch(client, m.seedCtx, wsMsg.Type, wsMsg.Payload) {
+		if seedDispatch(client, m.seedCtx, m.evtCtx, wsMsg.Type, wsMsg.Payload) {
 			continue
 		}
 

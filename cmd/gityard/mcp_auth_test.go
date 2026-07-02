@@ -36,7 +36,7 @@ func TestMCPAuthE2E(t *testing.T) {
 		return nil, serverInfoOutput{Name: "test", Version: "0.0.0"}, nil
 	})
 	registerRepoTools(mcpServer, gitStore)
-	registerSeedTools(mcpServer, gitStore, v, "")
+	registerSeedTools(mcpServer, gitStore, v, "", nil)
 
 	// Create the MCP HTTP handler with authentication.
 	validToken := "test-token-12345"

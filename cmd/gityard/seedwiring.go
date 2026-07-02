@@ -64,7 +64,7 @@ func buildGityardCloneURL(sc *seedContext, namespace, project string) string {
 }
 
 // seedDispatch handles SEED_* WebSocket messages. Returns true if the message was handled.
-func seedDispatch(c *uiws.Client, sc *seedContext, msgType uiws.MessageType, payload json.RawMessage) bool {
+func seedDispatch(c *uiws.Client, sc *seedContext, ec *eventContext, msgType uiws.MessageType, payload json.RawMessage) bool {
 	switch msgType {
 	case MsgSeedConfigGet:
 		handleSeedConfigGet(c, sc.gitStore, payload)
@@ -83,7 +83,7 @@ func seedDispatch(c *uiws.Client, sc *seedContext, msgType uiws.MessageType, pay
 	case MsgSeedPush:
 		handleSeedPushWS(c, sc, payload)
 	case MsgSeedPull:
-		handleSeedPullWS(c, sc, payload)
+		handleSeedPullWS(c, sc, ec, payload)
 	case MsgSeedResume:
 		handleSeedResume(c, sc, payload)
 	case MsgSeedStatus:
@@ -310,17 +310,17 @@ func handleSeedPushWS(c *uiws.Client, sc *seedContext, payload json.RawMessage) 
 	c.SendResponse(MsgSeedPush, map[string]interface{}{"success": true})
 }
 
-func handleSeedPullWS(c *uiws.Client, sc *seedContext, payload json.RawMessage) {
+func handleSeedPullWS(c *uiws.Client, sc *seedContext, ec *eventContext, payload json.RawMessage) {
 	var p seedTargetPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
 		c.SendError("invalid payload")
 		return
 	}
-	result := executeSeedPull(sc, p.Namespace, p.ProjectName, "")
+	result := executeSeedPull(sc, ec, p.Namespace, p.ProjectName, "")
 	c.SendResponse(MsgSeedPull, result)
 }
 
-func executeSeedPull(sc *seedContext, namespace, project, branch string) map[string]interface{} {
+func executeSeedPull(sc *seedContext, ec *eventContext, namespace, project, branch string) map[string]interface{} {
 	if sc.vault.State() != vault.VaultUnlocked {
 		return map[string]interface{}{"success": false, "error": "vault is locked — resume required"}
 	}
@@ -356,7 +356,11 @@ func executeSeedPull(sc *seedContext, namespace, project, branch string) map[str
 	}
 	localHash, err := git.ResolveBranch(repo, branch)
 	if err != nil {
-		return map[string]interface{}{"success": false, "error": err.Error()}
+		if err2 := git.SetBranchRef(repo, branch, seedHash); err2 != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("create branch: %v", err2)}
+		}
+		recordHeadHash(sc.gitStore, namespace, project)
+		return map[string]interface{}{"success": true, "status": "fast-forward", "message": "initial pull from seed"}
 	}
 
 	mr, err := git.SeedMerge(repo, localHash, seedHash)
@@ -375,8 +379,10 @@ func executeSeedPull(sc *seedContext, namespace, project, branch string) map[str
 		return map[string]interface{}{"success": true, "status": mr.Status, "message": mr.Status + " completed"}
 	case "conflict":
 		var conflicts []conflictInfoWire
+		var conflictPaths []string
 		for _, c := range mr.Conflicts {
 			conflicts = append(conflicts, conflictInfoWire{Path: c.Path, Type: c.Type})
+			conflictPaths = append(conflictPaths, c.Path)
 		}
 		resp := map[string]interface{}{
 			"success":   false,
@@ -393,6 +399,9 @@ func executeSeedPull(sc *seedContext, namespace, project, branch string) map[str
 					Namespace: namespace, Project: project,
 					Path: tempDir, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 				})
+			}
+			if ec != nil {
+				go onSeedPullConflict(ec, namespace, project, tempDir, conflictPaths)
 			}
 		}
 		return resp
@@ -570,7 +579,7 @@ func executeSeedPushWithMerge(sc *seedContext, namespace, projectName, branch st
 }
 
 // registerSeedTools registers seed-related MCP tools.
-func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vault, gityardURL string) {
+func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vault, gityardURL string, ec *eventContext) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "push_to_seed",
 		Description: "Push a branch to the configured seed repository via SSH. Auto-merges if seed has diverged cleanly; reports conflicts otherwise.",
@@ -592,7 +601,7 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 		Description: "Pull from the configured seed repository via SSH. Auto-merges if branches have diverged cleanly; reports conflicts otherwise.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in pullFromSeedInput) (*mcp.CallToolResult, pullFromSeedOutput, error) {
 		sc := &seedContext{gitStore: gitStore, vault: v, gityardURL: gityardURL}
-		r := executeSeedPull(sc, in.Namespace, in.ProjectName, in.Branch)
+		r := executeSeedPull(sc, ec, in.Namespace, in.ProjectName, in.Branch)
 		success, _ := r["success"].(bool)
 		msg, _ := r["message"].(string)
 		if msg == "" {

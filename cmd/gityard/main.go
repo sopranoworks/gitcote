@@ -516,7 +516,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, gityardUR
 
 	registerPRTools(mcpServer, gitStore, sc, ec)
 	registerRepoTools(mcpServer, gitStore)
-	registerSeedTools(mcpServer, gitStore, sc.vault, gityardURL)
+	registerSeedTools(mcpServer, gitStore, sc.vault, gityardURL, ec)
 
 	return mcpServer
 }
