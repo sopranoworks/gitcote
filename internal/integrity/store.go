@@ -551,6 +551,9 @@ func (s *Store) ListAgentTokens() ([]AgentTokenRecord, error) {
 
 // --- PR Queue ---
 
+// SeedSyncSentinel is the sentinel PR number used to represent seed sync in the queue.
+const SeedSyncSentinel = -1
+
 // PRQueue tracks the per-project PR processing queue.
 type PRQueue struct {
 	ActivePR int   `json:"active_pr"`
@@ -596,6 +599,43 @@ func (s *Store) EnqueuePR(ns, proj string, prNumber int) (isActive bool, err err
 				q.Waiting = []int{}
 			}
 			q.Waiting = append(q.Waiting, prNumber)
+			isActive = false
+		}
+		data, jerr := json.Marshal(q)
+		if jerr != nil {
+			return jerr
+		}
+		return b.Put([]byte(key), data)
+	})
+	return
+}
+
+// EnqueuePriority adds an entry at the front of the waiting list (priority insertion).
+// If no entry is active, it becomes active immediately (isActive=true).
+func (s *Store) EnqueuePriority(ns, proj string, num int) (isActive bool, err error) {
+	key := prQueueKey(ns, proj)
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketPRQueues)
+		var q PRQueue
+		if v := b.Get([]byte(key)); v != nil {
+			if uerr := json.Unmarshal(v, &q); uerr != nil {
+				q = PRQueue{}
+			}
+		}
+		if q.ActivePR == num {
+			isActive = true
+			return nil
+		}
+		for _, w := range q.Waiting {
+			if w == num {
+				return nil
+			}
+		}
+		if q.ActivePR == 0 {
+			q.ActivePR = num
+			isActive = true
+		} else {
+			q.Waiting = append([]int{num}, q.Waiting...)
 			isActive = false
 		}
 		data, jerr := json.Marshal(q)

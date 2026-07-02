@@ -538,6 +538,11 @@ func releasePRSlotAndDequeue(ec *eventContext, ns, proj string, prNumber int) {
 	if !found {
 		return
 	}
+	if nextPR == integrity.SeedSyncSentinel {
+		ec.logger.Info("seed sync dequeued from PR queue", "namespace", ns, "project", proj)
+		go executeSeedPullFromQueue(ec, ns, proj)
+		return
+	}
 	prStore, err := getPRStore(ec.gitStore.BaseDir(), ns, proj)
 	if err != nil {
 		ec.logger.Error("get PR store for dequeue", "error", err)
@@ -786,6 +791,7 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 	if err != nil {
 		ec.logger.Error("scan agent configs for seed sync", "error", err)
 		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		releaseSeedSyncSlot(ec, ns, proj)
 		return
 	}
 
@@ -802,6 +808,7 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 	if ac == nil {
 		ec.logger.Warn("no agent config found for seed sync merger", "agent_name", action.AgentName)
 		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		releaseSeedSyncSlot(ec, ns, proj)
 		return
 	}
 
@@ -820,6 +827,7 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 		result := executeAgentForSeedSync(ec, ac, ns, proj, tempDir, conflictFiles)
 		if result != nil && result.ExitCode == 0 {
 			verifySeedSyncAfterAgent(ec, ns, proj, tempDir)
+			releaseSeedSyncSlot(ec, ns, proj)
 			return
 		}
 
@@ -840,6 +848,7 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 
 		ec.logger.Error("seed sync agent failed", "ns", ns, "proj", proj, "detail", detail)
 		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		releaseSeedSyncSlot(ec, ns, proj)
 	}
 }
 
@@ -1000,6 +1009,77 @@ func updateSeedSyncState(gitStore *git.Store, ns, proj, state string) {
 		return
 	}
 	_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{State: state})
+}
+
+// executeSeedPullFromQueue runs seed pull when the queue slot becomes available.
+// The queue slot is already held (SeedSyncSentinel is active).
+func executeSeedPullFromQueue(ec *eventContext, ns, proj string) {
+	if ec.seedCtx == nil {
+		ec.logger.Error("seed sync from queue: no seed context")
+		releaseSeedSyncSlot(ec, ns, proj)
+		return
+	}
+	updateSeedSyncState(ec.gitStore, ns, proj, "syncing")
+	result := doSeedPull(ec.seedCtx, ec, ns, proj, "main")
+	success, _ := result["success"].(bool)
+	status, _ := result["status"].(string)
+	if success {
+		updateSeedSyncState(ec.gitStore, ns, proj, "idle")
+		releaseSeedSyncSlot(ec, ns, proj)
+	} else if status == "conflict" {
+		updateSeedSyncState(ec.gitStore, ns, proj, "conflict")
+		if !seedPullConflictAgentEnabled(ec, ns, proj) {
+			releaseSeedSyncSlot(ec, ns, proj)
+		}
+	} else {
+		ec.logger.Warn("seed sync from queue failed", "ns", ns, "proj", proj, "result", result)
+		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		releaseSeedSyncSlot(ec, ns, proj)
+	}
+}
+
+func seedPullConflictAgentEnabled(ec *eventContext, ns, proj string) bool {
+	if ec.integrityHS == nil {
+		return false
+	}
+	global, _ := ec.integrityHS.GetGlobalSeedEventSettings()
+	project, _ := ec.integrityHS.GetProjectSeedEventSettings(ns, proj)
+	var globalAction, projectAction *integrity.EventAction
+	if global != nil {
+		globalAction = global.OnPullConflict
+	}
+	if project != nil {
+		projectAction = project.OnPullConflict
+	}
+	action := integrity.ResolveEventAction(projectAction, globalAction)
+	return action.AgentEnabled
+}
+
+// releaseSeedSyncSlot releases the queue slot held by seed sync.
+func releaseSeedSyncSlot(ec *eventContext, ns, proj string) {
+	if ec.integrityHS == nil {
+		return
+	}
+	nextPR, found, err := ec.integrityHS.ReleasePRSlot(ns, proj, integrity.SeedSyncSentinel)
+	if err != nil {
+		ec.logger.Error("release seed sync slot", "error", err, "ns", ns, "proj", proj)
+		return
+	}
+	if !found {
+		return
+	}
+	prStore, err := getPRStore(ec.gitStore.BaseDir(), ns, proj)
+	if err != nil {
+		ec.logger.Error("get PR store after seed sync", "error", err)
+		return
+	}
+	p, err := prStore.Get(uint32(nextPR))
+	if err != nil {
+		ec.logger.Error("get dequeued PR after seed sync", "error", err, "pr", nextPR)
+		return
+	}
+	ec.logger.Info("PR dequeued after seed sync", "pr", nextPR, "namespace", ns, "project", proj)
+	go onPRCreated(ec, p)
 }
 
 // --- Event Settings WebSocket Handlers ---

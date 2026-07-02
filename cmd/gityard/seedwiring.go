@@ -327,6 +327,48 @@ func executeSeedPull(sc *seedContext, ec *eventContext, namespace, project, bran
 	if branch == "" {
 		branch = "main"
 	}
+
+	// Acquire PR queue slot for mutual exclusion with PR processing.
+	queued := false
+	if ec != nil && ec.integrityHS != nil {
+		isActive, qerr := ec.integrityHS.EnqueuePriority(namespace, project, integrity.SeedSyncSentinel)
+		if qerr != nil {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("queue: %v", qerr)}
+		}
+		if !isActive {
+			queued = true
+			ec.logger.Info("seed sync queued, waiting for active PR to complete",
+				"namespace", namespace, "project", project)
+		}
+	}
+	if queued {
+		return map[string]interface{}{
+			"success": false,
+			"status":  "queued",
+			"message": "seed sync queued — a PR is being processed, will execute when slot is free",
+		}
+	}
+
+	result := doSeedPull(sc, ec, namespace, project, branch)
+
+	// Release queue slot on success or non-conflict failure.
+	status, _ := result["status"].(string)
+	success, _ := result["success"].(bool)
+	if ec != nil && ec.integrityHS != nil {
+		if success || (status != "conflict" && status != "queued") {
+			releaseSeedSyncSlot(ec, namespace, project)
+		}
+		// On conflict with agent enabled, spawnAgentForSeedSync handles release.
+		// On conflict without agent, release now.
+		if status == "conflict" && !seedPullConflictAgentEnabled(ec, namespace, project) {
+			releaseSeedSyncSlot(ec, namespace, project)
+		}
+	}
+
+	return result
+}
+
+func doSeedPull(sc *seedContext, ec *eventContext, namespace, project, branch string) map[string]interface{} {
 	projPath, err := sc.gitStore.ProjectPath(namespace, project)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}
@@ -356,6 +398,7 @@ func executeSeedPull(sc *seedContext, ec *eventContext, namespace, project, bran
 	}
 	localHash, err := git.ResolveBranch(repo, branch)
 	if err != nil {
+		// Local branch doesn't exist yet (empty repo) — treat as fast-forward from seed
 		if err2 := git.SetBranchRef(repo, branch, seedHash); err2 != nil {
 			return map[string]interface{}{"success": false, "error": fmt.Sprintf("create branch: %v", err2)}
 		}
