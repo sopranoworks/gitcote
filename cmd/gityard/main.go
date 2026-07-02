@@ -388,6 +388,8 @@ func run(cfg *Config, logger *slog.Logger) error {
 	}
 
 	// Plain (internal) MCP transport: static-bearer iff bearer_auth, else open loopback.
+	// Read-only by default: plain connections get *:r scope so only read tools are
+	// advertised and write/admin calls are rejected by the per-tool authz checks.
 	if cfg.Server.MCP.Plain.Listen != "" {
 		var plainAuth *auth.Authenticator
 		if cfg.Server.MCP.Plain.BearerAuth {
@@ -395,7 +397,12 @@ func run(cfg *Config, logger *slog.Logger) error {
 		} else {
 			plainAuth = auth.New(auth.Config{}) // disabled → allow all (loopback use)
 		}
-		handler := reqtrace.Middleware(logger, "mcp-plain", dumpHTTP)(plainAuth.Middleware(newMCPHandler()))
+		plainPrincipal := auth.Principal{
+			Name:  cfg.Identity.User.Name,
+			Email: cfg.Identity.User.Email,
+			Scope: "*:r",
+		}
+		handler := reqtrace.Middleware(logger, "mcp-plain", dumpHTTP)(plainAuth.Middleware(injectPrincipal(plainPrincipal)(newMCPHandler())))
 		g.Go(func() error {
 			return runServer(ctx, "mcp-plain", cfg.Server.MCP.Plain.Listen, handler, logger)
 		})
@@ -524,6 +531,8 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, gityardUR
 	registerPRTools(mcpServer, gitStore, sc, ec)
 	registerRepoTools(mcpServer, gitStore)
 	registerSeedTools(mcpServer, gitStore, sc.vault, gityardURL, ec)
+
+	mcpServer.AddReceivingMiddleware(toolFilterMiddleware())
 
 	return mcpServer
 }
