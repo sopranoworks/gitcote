@@ -1,0 +1,39 @@
+# github.com/evanw/esbuild v0.28.1
+## explicit; go 1.13
+github.com/evanw/esbuild/internal/api_helpers
+github.com/evanw/esbuild/internal/ast
+github.com/evanw/esbuild/internal/bundler
+github.com/evanw/esbuild/internal/cache
+github.com/evanw/esbuild/internal/compat
+github.com/evanw/esbuild/internal/config
+github.com/evanw/esbuild/internal/css_ast
+github.com/evanw/esbuild/internal/css_lexer
+github.com/evanw/esbuild/internal/css_parser
+github.com/evanw/esbuild/internal/css_printer
+github.com/evanw/esbuild/internal/fs
+github.com/evanw/esbuild/internal/graph
+github.com/evanw/esbuild/internal/helpers
+github.com/evanw/esbuild/internal/js_ast
+github.com/evanw/esbuild/internal/js_lexer
+github.com/evanw/esbuild/internal/js_parser
+github.com/evanw/esbuild/internal/js_printer
+github.com/evanw/esbuild/internal/linker
+github.com/evanw/esbuild/internal/logger
+github.com/evanw/esbuild/internal/renamer
+github.com/evanw/esbuild/internal/resolver
+github.com/evanw/esbuild/internal/runtime
+github.com/evanw/esbuild/internal/sourcemap
+github.com/evanw/esbuild/internal/xxhash
+github.com/evanw/esbuild/pkg/api
+# github.com/sopranoworks/npmgo v0.4.1 => /home/takahashi/Documents/src/npmgo
+## explicit; go 1.26
+github.com/sopranoworks/npmgo
+# github.com/sopranoworks/npmgo/esbuildplugin v0.4.1 => /home/takahashi/Documents/src/npmgo/esbuildplugin
+## explicit; go 1.26
+github.com/sopranoworks/npmgo/esbuildplugin
+# golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8
+## explicit; go 1.17
+golang.org/x/sys/internal/unsafeheader
+golang.org/x/sys/unix
+# github.com/sopranoworks/npmgo => /home/takahashi/Documents/src/npmgo
+# github.com/sopranoworks/npmgo/esbuildplugin => /home/takahashi/Documents/src/npmgo/esbuildplugin
