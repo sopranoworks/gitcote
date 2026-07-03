@@ -1,5 +1,8 @@
 # GitCote
 
+[![version](https://img.shields.io/badge/version-1.0.0--rc1-blue)](#)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 GitCote is an agent-oriented Git staging yard — a private intermediary between
 coding agents and seed (master) repositories. Agents push work to GitCote over
 Smart HTTP; an operator reviews and approves pull requests; GitCote pushes
@@ -93,9 +96,10 @@ React + [@shoka/web-core](https://github.com/sopranoworks/shoka) (frontend).
 
 ## Version
 
-This is **0.0.3-step2r**. The running binary reports it via `gitcote --version`,
+This is **1.0.0-rc1**. The running binary reports it via `gitcote --version`,
 and the MCP server advertises it in `get_server_info`.
 
 ## License
 
-See [`LICENSE`](LICENSE).
+GitCote is licensed under the **MIT License** — see [`LICENSE`](LICENSE) for the
+full text.

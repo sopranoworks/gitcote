@@ -8,7 +8,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/modelcontextprotocol/go-sdk v1.6.0
 	github.com/sergi/go-diff v1.4.0
-	github.com/sopranoworks/shoka/pkg v0.0.0
+	github.com/sopranoworks/shoka/pkg v1.0.0-rc2
 	go.etcd.io/bbolt v1.4.3
 	go.yaml.in/yaml/v4 v4.0.0-rc.2
 	golang.org/x/crypto v0.52.0
@@ -45,8 +45,3 @@ require (
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )
-
-// The Shoka core (pkg/) submodule is local-only — not yet pushed or tagged (Shape A).
-// During development GitCote consumes it via this replace into the sibling checkout.
-// Remove once pkg/ is published and pin a real version.
-replace github.com/sopranoworks/shoka/pkg => ../shoka/pkg

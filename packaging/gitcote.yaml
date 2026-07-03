@@ -1,0 +1,11 @@
+server:
+  http:
+    listen: ":8080"
+  mcp:
+    plain:
+      listen: ":8081"
+  log:
+    output: "stderr"
+
+storage:
+  base_dir: "/var/lib/gitcote"

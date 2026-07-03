@@ -1,0 +1,19 @@
+[Unit]
+Description=GitCote Agent-Oriented Git Staging Yard
+Documentation=https://github.com/sopranoworks/gitcote
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gitcote --config /etc/gitcote/gitcote.yaml
+User=gitcote
+Group=gitcote
+WorkingDirectory=/var/lib/gitcote
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target

@@ -25,6 +25,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/go-git/go-git/v6/storage"
 	"github.com/sopranoworks/gitcote/internal/git"
+	"github.com/sopranoworks/gitcote/internal/version"
 	"github.com/sopranoworks/gitcote/internal/integrity"
 	"github.com/sopranoworks/gitcote/internal/sshd"
 	"github.com/sopranoworks/gitcote/internal/sshkeys"
@@ -41,15 +42,13 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-const version = "0.0.3-step2r"
-
 func main() {
 	showVersion := flag.Bool("version", false, "Print the GitCote version and exit without starting the server.")
 	configPath := flag.String("config", "gitcote.yaml", "Path to configuration file")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("gitcote %s\n", version)
+		fmt.Printf("gitcote %s\n", version.Version)
 		return
 	}
 
@@ -500,7 +499,7 @@ func setupWebHandler(webAuth *auth.Authenticator, authHandler *authapi.Handler, 
 // project/repo management (list_projects).
 func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, gitcoteURL string, integrityHS *integrity.Store, ec *eventContext, logger *slog.Logger) *mcp.Server {
 	mcpServer := mcp.NewServer(
-		&mcp.Implementation{Name: "gitcote", Version: version},
+		&mcp.Implementation{Name: "gitcote", Version: version.Version},
 		&mcp.ServerOptions{Logger: logger},
 	)
 
@@ -510,7 +509,7 @@ func setupMCPServer(cfg *Config, gitStore *git.Store, sc *seedContext, gitcoteUR
 	}, func(_ context.Context, _ *mcp.CallToolRequest, _ serverInfoInput) (*mcp.CallToolResult, serverInfoOutput, error) {
 		return nil, serverInfoOutput{
 			Name:        "gitcote",
-			Version:     version,
+			Version:     version.Version,
 			ExternalURL: cfg.Server.HTTP.ExternalURL,
 		}, nil
 	})

@@ -1,0 +1,43 @@
+name: gitcote
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: GitCote maintainers <gitcote@users.noreply.github.com>
+description: |
+  GitCote — agent-oriented Git staging yard.
+  A private intermediary between coding agents and seed (master) repositories.
+  Agents push work over Smart HTTP; an operator reviews and approves pull requests;
+  GitCote pushes approved changes onward to the seed repository via SSH.
+  Built on Shoka's core. Pure Go — no external Git binary.
+homepage: https://github.com/sopranoworks/gitcote
+
+depends:
+  - adduser
+
+contents:
+  - src: dist/gitcote
+    dst: /usr/bin/gitcote
+    file_info:
+      mode: 0755
+  - src: packaging/gitcote.yaml
+    dst: /etc/gitcote/gitcote.yaml
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: packaging/gitcote.service
+    dst: /lib/systemd/system/gitcote.service
+    file_info:
+      mode: 0644
+  - dst: /var/lib/gitcote
+    type: dir
+    file_info:
+      mode: 0750
+      owner: gitcote
+      group: gitcote
+
+scripts:
+  postinstall: packaging/postinst.sh
+  preremove: packaging/prerm.sh
+  postremove: packaging/postrm.sh
