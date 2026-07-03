@@ -1,0 +1,46 @@
+.diagram {
+  margin: 1em 0;
+  padding: 1em;
+  background: var(--c-bg-elev);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  overflow-x: auto;
+  text-align: center;
+}
+.diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.loading {
+  margin: 1em 0;
+  padding: 1em;
+  color: var(--c-text-faint);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+.error {
+  margin: 1em 0;
+  border: 1px solid var(--c-bad);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.errorLabel {
+  display: block;
+  padding: 0.4em 0.8em;
+  background: var(--c-bad);
+  color: #fff;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.raw {
+  margin: 0;
+  padding: 0.8em;
+  background: var(--c-bg-inset);
+  color: var(--c-text);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

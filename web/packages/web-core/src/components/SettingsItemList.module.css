@@ -1,0 +1,58 @@
+/* Styles for SettingsItemList — extracted from the app's Sidebar.module.css (the six
+   classes this component used) so the reusable settings list carries its own styling and
+   does not depend on the app's sidebar stylesheet. Values are identical. */
+.pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.sectionHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--c-text-faint);
+  border-bottom: 1px solid var(--c-border);
+  user-select: none;
+}
+.projTitle {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: var(--fs-sm);
+  color: var(--c-text);
+  font-weight: 600;
+}
+.treeWrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: var(--sp-1) 0;
+}
+.empty {
+  padding: var(--sp-4) var(--sp-3);
+  color: var(--c-text-faint);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+.settingsItem {
+  display: block;
+  padding: 0.45rem 0.75rem;
+  color: var(--c-text, #cfcfcf);
+  text-decoration: none;
+  font-size: 0.9rem;
+  border-radius: 6px;
+  margin: 0.1rem 0.4rem;
+}
+.settingsItem:hover {
+  background: var(--c-hover, rgba(255, 255, 255, 0.06));
+}
+.settingsItem[data-active='true'] {
+  background: var(--c-active, rgba(79, 124, 255, 0.18));
+  color: var(--c-text, #fff);
+}

@@ -1,0 +1,229 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.tabs {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+.tab {
+  display: inline-block;
+  padding: 2px 12px;
+  font-size: var(--fs-sm);
+  color: var(--c-text-dim);
+  border-radius: calc(var(--radius-sm) - 1px);
+  text-decoration: none;
+}
+.tab:hover {
+  color: var(--c-text);
+}
+.tab[data-active='true'] {
+  background: var(--c-bg-elev);
+  color: var(--c-text);
+}
+
+.split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.commitList {
+  flex: none;
+  width: 280px;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--c-border);
+  background: var(--c-bg-elev);
+}
+.commits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.commit {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--c-border);
+  text-decoration: none;
+  color: var(--c-text);
+}
+.commit:hover {
+  background: var(--c-hover);
+}
+.commit[data-active='true'] {
+  background: var(--c-selected, var(--c-hover));
+  box-shadow: inset 2px 0 0 var(--c-accent, var(--c-text-dim));
+}
+.commitSubject {
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.commitMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs, 11px);
+  color: var(--c-text-faint);
+}
+.committer {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.commitDate {
+  flex: none;
+}
+.shortHash {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+}
+
+.detail {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.versionBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-5) var(--sp-5) var(--sp-6);
+}
+
+.empty {
+  padding: var(--sp-5);
+  color: var(--c-text-faint);
+}
+
+.diffPanel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.compareBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg-elev);
+}
+.compareField {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+.compareLabel {
+  color: var(--c-text-faint);
+}
+.compareSelect {
+  max-width: 240px;
+  background: var(--c-bg);
+  color: var(--c-text);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: var(--fs-sm);
+}
+.compareArrow {
+  color: var(--c-text-faint);
+}
+
+.suppressed {
+  margin: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--c-warn, var(--c-text-dim)) 14%, transparent);
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+}
+
+.diff {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.hunk {
+  border-bottom: 1px solid var(--c-border);
+}
+.hunkHeader {
+  padding: 2px var(--sp-3);
+  color: var(--c-text-faint);
+  background: var(--c-bg-elev);
+  user-select: none;
+}
+.diffLine {
+  display: flex;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.lineNo {
+  flex: none;
+  width: 3.2em;
+  padding-right: var(--sp-2);
+  text-align: right;
+  color: var(--c-text-faint);
+  user-select: none;
+}
+.lineSign {
+  flex: none;
+  width: 1.4em;
+  text-align: center;
+  user-select: none;
+}
+.lineText {
+  flex: 1;
+  min-width: 0;
+}
+.diffLine[data-op='add'] {
+  background: color-mix(in srgb, var(--c-good) 16%, transparent);
+}
+.diffLine[data-op='add'] .lineSign {
+  color: var(--c-good);
+}
+.diffLine[data-op='delete'] {
+  background: color-mix(in srgb, var(--c-bad) 16%, transparent);
+}
+.diffLine[data-op='delete'] .lineSign {
+  color: var(--c-bad);
+}
+
+@media (max-width: 640px) {
+  .split {
+    flex-direction: column;
+  }
+  .commitList {
+    width: auto;
+    max-height: 38%;
+    border-right: none;
+    border-bottom: 1px solid var(--c-border);
+  }
+}

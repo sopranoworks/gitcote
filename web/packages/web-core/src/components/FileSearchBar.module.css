@@ -1,0 +1,92 @@
+.bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px var(--sp-4);
+  background: var(--c-bg-elev);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.input {
+  flex: 1;
+  min-width: 80px;
+  max-width: 260px;
+  background: var(--c-bg-inset);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+  padding: 3px 8px;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+
+.matchInfo {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--c-text-faint);
+  white-space: nowrap;
+  min-width: 60px;
+  text-align: center;
+}
+
+.navBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--c-text-dim);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  padding: 0;
+}
+.navBtn:hover:not(:disabled) {
+  background: var(--c-hover);
+  color: var(--c-text);
+}
+.navBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.navBtn.active {
+  background: var(--c-accent-soft);
+  color: var(--c-accent-text);
+  border-color: var(--c-accent);
+}
+
+.closeBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--c-text-faint);
+  cursor: pointer;
+  padding: 0;
+  margin-left: 2px;
+}
+.closeBtn:hover {
+  background: var(--c-hover);
+  color: var(--c-text);
+}
+
+:global(::highlight(file-search)) {
+  background-color: rgba(255, 200, 0, 0.35);
+  color: inherit;
+}
+:global(::highlight(file-search-current)) {
+  background-color: rgba(255, 140, 0, 0.65);
+  color: inherit;
+}

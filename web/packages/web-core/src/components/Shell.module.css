@@ -1,0 +1,92 @@
+.shell {
+  display: grid;
+  grid-template-rows: var(--titlebar-h) 1fr var(--statusbar-h);
+  height: 100%;
+  overflow: hidden;
+  background: var(--c-bg);
+}
+
+.body {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panelArea {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sidebarPanel {
+  background: var(--c-bg-elev);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.contentPanel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--c-bg);
+}
+
+.resizeHandle {
+  width: 1px;
+  background: var(--c-border);
+  position: relative;
+  outline: none;
+  flex: 0 0 1px;
+}
+.resizeHandle::after {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
+  cursor: col-resize;
+}
+.resizeHandle[data-resize-handle-state='hover']::after,
+.resizeHandle[data-resize-handle-state='drag']::after {
+  background: var(--c-accent);
+  opacity: 0.6;
+}
+
+.resizeHandleH {
+  height: 1px;
+  background: var(--c-border);
+  position: relative;
+  outline: none;
+  flex: 0 0 1px;
+}
+.resizeHandleH::after {
+  content: '';
+  position: absolute;
+  inset: -3px 0;
+  cursor: row-resize;
+}
+.resizeHandleH[data-resize-handle-state='hover']::after,
+.resizeHandleH[data-resize-handle-state='drag']::after {
+  background: var(--c-accent);
+  opacity: 0.6;
+}
+
+.shell[data-narrow='true'] .sidebarPanel {
+  border-bottom: 1px solid var(--c-border);
+}
+.shell[data-narrow='false'] .sidebarPanel {
+  border-right: 1px solid var(--c-border);
+}
+
+@media (max-width: 640px) {
+  .body {
+    flex-direction: column;
+  }
+}

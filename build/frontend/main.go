@@ -52,7 +52,7 @@ func main() {
 		Metafile: true,
 		Write:    true,
 		Plugins: []esbuild.Plugin{
-			webCorePlugin(),
+			vendoredWebCorePlugin(),
 			compatPlugin(),
 			esbuildplugin.New(index),
 		},
@@ -91,8 +91,11 @@ func main() {
 	fmt.Println("build/frontend: done")
 }
 
-func webCorePlugin() esbuild.Plugin {
-	webCoreSrc, _ := filepath.Abs("../shoka/packages/web-core/src")
+// vendoredWebCorePlugin resolves @shoka/web-core imports from the vendored
+// copy at web/packages/web-core/. The package ships TypeScript source so it
+// cannot go through npmgo's tarball cache (which only resolves .js extensions).
+func vendoredWebCorePlugin() esbuild.Plugin {
+	webCoreSrc, _ := filepath.Abs("web/packages/web-core/src")
 
 	exports := map[string]string{
 		".":                    "index.ts",
@@ -101,7 +104,7 @@ func webCorePlugin() esbuild.Plugin {
 	}
 
 	return esbuild.Plugin{
-		Name: "shoka-web-core",
+		Name: "vendored-web-core",
 		Setup: func(build esbuild.PluginBuild) {
 			build.OnResolve(esbuild.OnResolveOptions{Filter: `^@shoka/web-core`}, func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {
 				subpath := strings.TrimPrefix(args.Path, "@shoka/web-core")
@@ -124,9 +127,7 @@ func webCorePlugin() esbuild.Plugin {
 	}
 }
 
-// compatPlugin resolves Node.js subpath imports (#-prefixed) and fixes
-// d3 sub-package version resolution (d3-sankey nests d3-shape@1.x which
-// shadows d3-shape@3.x needed by d3 itself).
+// compatPlugin resolves Node.js subpath imports (#-prefixed).
 func compatPlugin() esbuild.Plugin {
 	subpathImports := map[string]string{
 		"#minpath": "vfile/lib/minpath.browser.js",
@@ -140,17 +141,6 @@ func compatPlugin() esbuild.Plugin {
 			build.OnResolve(esbuild.OnResolveOptions{Filter: `^#`}, func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {
 				if target, ok := subpathImports[args.Path]; ok {
 					return esbuild.OnResolveResult{Path: target, Namespace: "npmgo"}, nil
-				}
-				return esbuild.OnResolveResult{}, nil
-			})
-
-			// When d3's index re-exports from d3-shape, resolve from the
-			// file system (node_modules) to get 3.x, not npmgo's cache which
-			// may shadow it with d3-sankey's nested 1.x.
-			d3ShapeSrc, _ := filepath.Abs("web/node_modules/d3-shape/src/index.js")
-			build.OnResolve(esbuild.OnResolveOptions{Filter: `^d3-shape$`}, func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {
-				if strings.Contains(args.Importer, "d3") {
-					return esbuild.OnResolveResult{Path: d3ShapeSrc}, nil
 				}
 				return esbuild.OnResolveResult{}, nil
 			})

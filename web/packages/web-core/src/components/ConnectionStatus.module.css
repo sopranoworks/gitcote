@@ -1,0 +1,40 @@
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--c-text-dim);
+}
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: var(--c-text-faint);
+  flex: none;
+}
+.dot[data-status='connected'] {
+  background: var(--c-good);
+}
+.dot[data-status='connecting'],
+.dot[data-status='reconnecting'] {
+  background: var(--c-warn);
+}
+.dot[data-status='disconnected'] {
+  background: var(--c-bad);
+}
+.label {
+  white-space: nowrap;
+}
+.reconnect {
+  margin-left: 6px;
+  background: transparent;
+  color: var(--c-accent);
+  border: 1px solid var(--c-border-strong);
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.reconnect:hover {
+  background: var(--c-hover);
+}

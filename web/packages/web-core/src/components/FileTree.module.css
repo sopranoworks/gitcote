@@ -1,0 +1,116 @@
+.wrap {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding-right: var(--sp-2);
+  font-size: var(--fs-md);
+  color: var(--c-text-dim);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.row:hover {
+  background: var(--c-hover);
+  color: var(--c-text);
+}
+.row[data-active='true'] {
+  background: var(--c-accent-soft);
+  color: var(--c-accent-text);
+}
+
+.wrap :global(.row-selected) .row,
+.wrap :global([aria-selected='true']) .row {
+  background: var(--c-selection);
+  color: var(--c-text);
+}
+
+.row[data-reserved='true'] {
+  opacity: 0.5;
+}
+.row[data-reserved='true'] .name {
+  text-decoration: line-through;
+}
+
+.chevron {
+  flex: none;
+  width: 12px;
+  display: grid;
+  place-items: center;
+  color: var(--c-text-faint);
+}
+
+.icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--c-text-faint);
+}
+.row[data-active='true'] .icon {
+  color: var(--c-accent-text);
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  color: var(--c-text);
+  background: var(--c-bg);
+  border: 1px solid var(--c-accent);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  outline: none;
+}
+
+.ctxOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+.ctxMenu {
+  position: fixed;
+  z-index: 51;
+  min-width: 180px;
+  padding: var(--sp-1);
+  background: var(--c-bg-elevated, var(--c-bg));
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-elevated, 0 6px 24px rgba(0, 0, 0, 0.4));
+  display: flex;
+  flex-direction: column;
+}
+.ctxItem {
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--c-text);
+  font: inherit;
+  font-size: var(--fs-md);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctxItem:hover {
+  background: var(--c-hover);
+}
+.ctxItemDanger {
+  color: var(--c-danger, #e5534b);
+}
+.ctxItemDanger:hover {
+  background: var(--c-danger, #e5534b);
+  color: var(--c-bg);
+}

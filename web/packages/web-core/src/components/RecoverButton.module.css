@@ -1,0 +1,21 @@
+.recoverBtn {
+  margin-top: 8px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-fg, #fff);
+  background: var(--accent, #b4541e);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.recoverBtn:hover {
+  filter: brightness(1.08);
+}
+
+.recoverBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

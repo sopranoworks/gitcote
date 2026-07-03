@@ -1,0 +1,130 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-bg);
+  padding: 1.5rem;
+}
+
+.card {
+  width: 100%;
+  max-width: 26rem;
+  background: var(--c-bg-elev);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  padding: 2rem;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.35);
+}
+
+.title {
+  margin: 0 0 0.25rem;
+  font-size: 1.35rem;
+  font-weight: 650;
+}
+
+.subtitle {
+  margin: 0 0 1.5rem;
+  color: var(--c-text-dim);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.field label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--c-text-dim);
+}
+
+.field input {
+  padding: 0.6rem 0.7rem;
+  border-radius: 7px;
+  border: 1px solid var(--c-border);
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-size: 0.95rem;
+}
+
+.button {
+  width: 100%;
+  padding: 0.7rem;
+  border: none;
+  border-radius: 7px;
+  background: var(--c-accent);
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 0.5rem;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secondary {
+  background: transparent;
+  color: var(--c-accent);
+  border: 1px solid var(--c-border);
+}
+
+.error {
+  background: rgba(220, 70, 70, 0.12);
+  border: 1px solid rgba(220, 70, 70, 0.4);
+  color: var(--c-bad);
+  border-radius: 7px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.totpBox {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 0.85rem;
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+}
+
+.totpSecret {
+  font-family: var(--font-mono);
+  word-break: break-all;
+  background: var(--c-bg);
+  padding: 0.4rem 0.5rem;
+  border-radius: 5px;
+  margin: 0.4rem 0;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--c-text-faint);
+  font-size: 0.75rem;
+  margin: 1.1rem 0;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--c-border);
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}

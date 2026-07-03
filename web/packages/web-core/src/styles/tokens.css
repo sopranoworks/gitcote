@@ -1,0 +1,90 @@
+/* ============================================================
+   Design tokens — single source of truth as CSS custom props.
+   Dark is the default (:root); [data-theme="light"] overrides.
+
+   Importable standalone (web-core re-exports this as the consumable
+   token sheet); global.css @imports it. Behaviour is unchanged — this
+   is the same token block previously inlined at the top of global.css.
+   ============================================================ */
+:root {
+  /* spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* typography */
+  --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code",
+    Menlo, Consolas, monospace;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 20px;
+
+  /* z-index */
+  --z-titlebar: 30;
+  --z-overlay: 100;
+
+  /* motion (session 4 polish) — restrained, and disabled under
+     prefers-reduced-motion (see the guard at the bottom of global.css). */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur-med: 180ms;
+
+  /* layout */
+  --titlebar-h: 40px;
+  --statusbar-h: 26px;
+  --rail-w: 48px;
+
+  /* ---- DARK palette (default) ---- */
+  --c-bg: #1116;
+  --c-bg: #0f1115;
+  --c-bg-elev: #171a21;
+  --c-bg-elev-2: #1e222b;
+  --c-bg-inset: #0b0d11;
+  --c-border: #2a2f3a;
+  --c-border-strong: #3a4150;
+  --c-text: #e6e9ef;
+  --c-text-dim: #a4abb8;
+  --c-text-faint: #6b7280;
+  --c-accent: #4f9cf9;
+  --c-accent-soft: #1d3a5f;
+  --c-accent-text: #cfe2ff;
+  --c-good: #41c980;
+  --c-warn: #e3b341;
+  --c-bad: #f7768e;
+  --c-selection: #2d4a6b;
+  --c-hover: #ffffff0d;
+  --shadow-overlay: 0 16px 48px #00000080, 0 2px 8px #00000060;
+}
+
+[data-theme='light'] {
+  --c-bg: #f6f7f9;
+  --c-bg-elev: #ffffff;
+  --c-bg-elev-2: #eef0f3;
+  --c-bg-inset: #ffffff;
+  --c-border: #e1e4e9;
+  --c-border-strong: #cdd2da;
+  --c-text: #1c2128;
+  --c-text-dim: #57606a;
+  --c-text-faint: #8c959f;
+  --c-accent: #1f6feb;
+  --c-accent-soft: #ddebff;
+  --c-accent-text: #0a4bb3;
+  --c-good: #1a7f37;
+  --c-warn: #9a6700;
+  --c-bad: #cf222e;
+  --c-selection: #cfe2ff;
+  --c-hover: #00000008;
+  --shadow-overlay: 0 16px 48px #1c212820, 0 2px 8px #1c212814;
+}

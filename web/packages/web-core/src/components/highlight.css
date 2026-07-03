@@ -1,0 +1,109 @@
+/*
+ * Theme-aware highlight.js token colors for markdown fenced code blocks
+ * (rehype-highlight emits global .hljs-* classes — this is intentionally NOT a
+ * CSS module). The code-block container (background, border, padding) is styled
+ * by Markdown.module.css's `.md pre`; here we only color the tokens, and adapt
+ * to the dark-default / light themes via [data-theme] on <html>.
+ */
+
+:root {
+  --hl-comment: #6a7685;
+  --hl-keyword: #c191ff;
+  --hl-string: #8fd98f;
+  --hl-number: #e6a06c;
+  --hl-literal: #e6a06c;
+  --hl-title: #6cb6ff;
+  --hl-type: #6cd0c0;
+  --hl-attr: #6cb6ff;
+  --hl-symbol: #e6a06c;
+  --hl-meta: #6a7685;
+  --hl-tag: #7f8896;
+  --hl-deletion: #ff8a8a;
+  --hl-addition: #8fd98f;
+}
+
+[data-theme='light'] {
+  --hl-comment: #8a94a3;
+  --hl-keyword: #8250df;
+  --hl-string: #1a7f37;
+  --hl-number: #b35900;
+  --hl-literal: #b35900;
+  --hl-title: #0969da;
+  --hl-type: #0a7a6c;
+  --hl-attr: #0969da;
+  --hl-symbol: #b35900;
+  --hl-meta: #8a94a3;
+  --hl-tag: #57606a;
+  --hl-deletion: #cf222e;
+  --hl-addition: #1a7f37;
+}
+
+/* The container is the markdown <pre>; keep hljs background transparent. */
+.hljs {
+  background: transparent;
+  color: var(--c-text);
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-operator {
+  color: var(--hl-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-char.escape_,
+.hljs-meta .hljs-string {
+  color: var(--hl-string);
+}
+.hljs-number,
+.hljs-literal {
+  color: var(--hl-number);
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+  color: var(--hl-title);
+}
+.hljs-type,
+.hljs-built_in,
+.hljs-class .hljs-title {
+  color: var(--hl-type);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-variable,
+.hljs-params {
+  color: var(--hl-attr);
+}
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--hl-symbol);
+}
+.hljs-meta,
+.hljs-comment.hljs-doctag {
+  color: var(--hl-meta);
+}
+.hljs-tag,
+.hljs-punctuation {
+  color: var(--hl-tag);
+}
+.hljs-deletion {
+  color: var(--hl-deletion);
+}
+.hljs-addition {
+  color: var(--hl-addition);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}

@@ -1,0 +1,96 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #00000066;
+  padding: var(--sp-4);
+  animation: shoka-fade-in var(--dur-fast) ease;
+}
+.dialog {
+  width: 100%;
+  max-width: 420px;
+  background: var(--c-bg-elev);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+  padding: var(--sp-5);
+  animation: shoka-pop-in-center var(--dur-fast) var(--ease-out);
+}
+.title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-lg);
+  color: var(--c-text);
+}
+.message {
+  margin: 0 0 var(--sp-5);
+  font-size: var(--fs-md);
+  color: var(--c-text-dim);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.input {
+  display: block;
+  width: 100%;
+  margin-top: var(--sp-2);
+  padding: 6px 10px;
+  background: var(--c-bg-inset);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--c-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+.error {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--c-bad);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+.cancel {
+  background: transparent;
+  color: var(--c-text-dim);
+  border: 1px solid var(--c-border-strong);
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+.cancel:hover {
+  background: var(--c-hover);
+  color: var(--c-text);
+}
+.confirm {
+  background: var(--c-accent);
+  color: var(--c-accent-text);
+  border: 1px solid var(--c-accent);
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.confirm:hover {
+  filter: brightness(1.08);
+}
+.danger {
+  background: var(--c-bad);
+  color: #fff;
+  border: 1px solid var(--c-bad);
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.danger:hover {
+  filter: brightness(1.08);
+}
