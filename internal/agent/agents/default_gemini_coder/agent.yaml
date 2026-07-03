@@ -1,0 +1,6 @@
+agent:
+  role: coder
+  display_name: "Coder (gemini)"
+  command: 'gemini --yolo --skip-trust -p "$PROMPT"'
+  prompt: |
+    $PROMPT

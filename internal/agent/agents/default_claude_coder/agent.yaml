@@ -1,0 +1,6 @@
+agent:
+  role: coder
+  display_name: "Coder (claude)"
+  command: 'claude --permission-mode bypassPermissions -p "$PROMPT"'
+  prompt: |
+    $PROMPT

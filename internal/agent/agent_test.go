@@ -24,11 +24,11 @@ func TestScanAgentConfigs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Should include 6 built-in + 2 user configs
+	// Should include 8 built-in + 2 user configs
 	builtins, _ := builtinNames()
 	expectedCount := len(builtins) + 2
 	if len(configs) != expectedCount {
-		t.Fatalf("expected %d configs (6 builtin + 2 user), got %d", expectedCount, len(configs))
+		t.Fatalf("expected %d configs (%d builtin + 2 user), got %d", expectedCount, len(builtins), len(configs))
 	}
 
 	r := configs.FindByName("my_reviewer")
@@ -77,15 +77,17 @@ func TestScanAgentConfigs_BuiltinDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(configs) != 6 {
-		t.Fatalf("expected 6 builtin configs, got %d", len(configs))
+	if len(configs) != 8 {
+		t.Fatalf("expected 8 builtin configs, got %d", len(configs))
 	}
 
 	expectedNames := []string{
+		"default_claude_coder",
 		"default_claude_merger",
 		"default_claude_reviewer",
 		"default_codex_merger",
 		"default_codex_reviewer",
+		"default_gemini_coder",
 		"default_gemini_merger",
 		"default_gemini_reviewer",
 	}
@@ -107,6 +109,10 @@ func TestScanAgentConfigs_BuiltinDefaults(t *testing.T) {
 	mergers := configs.FindByRole("merger")
 	if len(mergers) != 3 {
 		t.Errorf("found %d mergers, want 3", len(mergers))
+	}
+	coders := configs.FindByRole("coder")
+	if len(coders) != 2 {
+		t.Errorf("found %d coders, want 2", len(coders))
 	}
 }
 
@@ -141,8 +147,8 @@ func TestScanAgentConfigs_EmptyConfigRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(configs) != 6 {
-		t.Fatalf("expected 6 builtin configs with empty configRoot dir, got %d", len(configs))
+	if len(configs) != 8 {
+		t.Fatalf("expected 8 builtin configs with empty configRoot dir, got %d", len(configs))
 	}
 }
 
@@ -151,8 +157,8 @@ func TestScanAgentConfigs_NonexistentConfigRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(configs) != 6 {
-		t.Fatalf("expected 6 builtin configs with nonexistent configRoot, got %d", len(configs))
+	if len(configs) != 8 {
+		t.Fatalf("expected 8 builtin configs with nonexistent configRoot, got %d", len(configs))
 	}
 }
 
