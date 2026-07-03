@@ -129,10 +129,13 @@ external TLS-terminating reverse proxy (nginx, etc.).
 | Audience | Document |
 |----------|----------|
 | Running & configuring | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) |
+| dovefeeder CLI | [`docs/dovefeeder.md`](docs/dovefeeder.md) |
 
 The configuration reference, build instructions, first-run walkthrough, OAuth
 setup, Git hosting, SSH key management, seed sync, and MCP tool reference are
-all in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+all in [`docs/OPERATIONS.md`](docs/OPERATIONS.md). The dovefeeder CLI tool for
+spawning coding agents is documented in
+[`docs/dovefeeder.md`](docs/dovefeeder.md).
 
 ## Tech stack
 
