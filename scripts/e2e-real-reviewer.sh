@@ -90,7 +90,7 @@ echo ""
 echo "--- Step 1: Building binaries ---"
 cd "$REPO_DIR"
 go build -o "$BUILD_DIR/gitcote"    ./cmd/gitcote
-go build -o "$BUILD_DIR/e2e-helper" ./cmd/e2e-helper
+go build -tags e2e -o "$BUILD_DIR/e2e-helper" ./internal/e2e/testcmd/e2e-helper
 echo "built: gitcote, e2e-helper"
 
 # ---- Step 2: Setup (repo + bbolt settings) ----

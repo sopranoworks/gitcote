@@ -34,11 +34,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     cwd: repoRoot,
     stdio: 'inherit',
   })
-  execFileSync('go', ['build', '-o', mockReviewerBin, './cmd/mock-reviewer'], {
+  execFileSync('go', ['build', '-tags', 'e2e', '-o', mockReviewerBin, './internal/e2e/testcmd/mock-reviewer'], {
     cwd: repoRoot,
     stdio: 'inherit',
   })
-  execFileSync('go', ['build', '-o', mockRejectorBin, './cmd/mock-rejector'], {
+  execFileSync('go', ['build', '-tags', 'e2e', '-o', mockRejectorBin, './internal/e2e/testcmd/mock-rejector'], {
     cwd: repoRoot,
     stdio: 'inherit',
   })

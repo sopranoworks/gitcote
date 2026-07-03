@@ -67,8 +67,8 @@ echo ""
 echo "--- Step 1: Building binaries ---"
 cd "$REPO_DIR"
 go build -o "$BUILD_DIR/gitcote"       ./cmd/gitcote
-go build -o "$BUILD_DIR/mock-reviewer" ./cmd/mock-reviewer
-go build -o "$BUILD_DIR/e2e-helper"    ./cmd/e2e-helper
+go build -tags e2e -o "$BUILD_DIR/mock-reviewer" ./internal/e2e/testcmd/mock-reviewer
+go build -tags e2e -o "$BUILD_DIR/e2e-helper"    ./internal/e2e/testcmd/e2e-helper
 echo "built: gitcote, mock-reviewer, e2e-helper"
 
 # ---- Step 2: Setup (repo + event settings) ----

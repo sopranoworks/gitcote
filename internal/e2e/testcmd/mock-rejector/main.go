@@ -1,7 +1,5 @@
-// Command mock-reviewer is a lightweight stand-in for a real AI reviewer agent.
-// It reads .mcp.json from its working directory, connects to the GitCote MCP
-// endpoint, reads the PR specified by environment variables, and approves it.
-// Used by the E2E full-flow test when a real claude CLI is unavailable.
+//go:build e2e
+
 package main
 
 import (
@@ -43,29 +41,29 @@ func main() {
 	prNum, _ := strconv.Atoi(prNumStr)
 
 	if ns == "" || proj == "" || prNum == 0 {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: NAMESPACE=%q PROJECT=%q PR_NUMBER=%q — all required\n", ns, proj, prNumStr)
+		fmt.Fprintf(os.Stderr, "mock-rejector: NAMESPACE=%q PROJECT=%q PR_NUMBER=%q — all required\n", ns, proj, prNumStr)
 		os.Exit(1)
 	}
 
 	data, err := os.ReadFile(".mcp.json")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: read .mcp.json: %v\n", err)
+		fmt.Fprintf(os.Stderr, "mock-rejector: read .mcp.json: %v\n", err)
 		os.Exit(1)
 	}
 
 	var cfg mcpConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: parse .mcp.json: %v\n", err)
+		fmt.Fprintf(os.Stderr, "mock-rejector: parse .mcp.json: %v\n", err)
 		os.Exit(1)
 	}
 
 	server, ok := cfg.MCPServers["gitcote"]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: no 'gitcote' server in .mcp.json\n")
+		fmt.Fprintf(os.Stderr, "mock-rejector: no 'gitcote' server in .mcp.json\n")
 		os.Exit(1)
 	}
 
-	fmt.Printf("mock-reviewer: connecting to %s for %s/%s#%d\n", server.URL, ns, proj, prNum)
+	fmt.Printf("mock-rejector: connecting to %s for %s/%s#%d\n", server.URL, ns, proj, prNum)
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	if len(server.Headers) > 0 {
@@ -76,7 +74,7 @@ func main() {
 	}
 
 	client := mcp.NewClient(
-		&mcp.Implementation{Name: "mock-reviewer", Version: "1.0"},
+		&mcp.Implementation{Name: "mock-rejector", Version: "1.0"},
 		nil,
 	)
 
@@ -91,7 +89,7 @@ func main() {
 
 	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: MCP connect: %v\n", err)
+		fmt.Fprintf(os.Stderr, "mock-rejector: MCP connect: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -104,35 +102,36 @@ func main() {
 		},
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: get_pull_request: %v\n", err)
+		fmt.Fprintf(os.Stderr, "mock-rejector: get_pull_request: %v\n", err)
 		os.Exit(1)
 	}
 	if result.IsError {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: get_pull_request returned error\n")
+		fmt.Fprintf(os.Stderr, "mock-rejector: get_pull_request returned error\n")
 		os.Exit(1)
 	}
 	for _, c := range result.Content {
 		if tc, ok := c.(*mcp.TextContent); ok {
-			fmt.Printf("mock-reviewer: PR info: %s\n", tc.Text)
+			fmt.Printf("mock-rejector: PR info: %s\n", tc.Text)
 		}
 	}
 
-	approveResult, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name: "approve_pull_request",
+	rejectResult, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "reject_pull_request",
 		Arguments: map[string]any{
 			"namespace":    ns,
 			"project_name": proj,
 			"number":       float64(prNum),
+			"reason":       "Code does not meet quality standards",
 		},
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: approve_pull_request: %v\n", err)
+		fmt.Fprintf(os.Stderr, "mock-rejector: reject_pull_request: %v\n", err)
 		os.Exit(1)
 	}
-	if approveResult.IsError {
-		fmt.Fprintf(os.Stderr, "mock-reviewer: approve_pull_request returned error\n")
+	if rejectResult.IsError {
+		fmt.Fprintf(os.Stderr, "mock-rejector: reject_pull_request returned error\n")
 		os.Exit(1)
 	}
 
-	fmt.Printf("mock-reviewer: PR %s/%s#%d approved successfully\n", ns, proj, prNum)
+	fmt.Printf("mock-rejector: PR %s/%s#%d rejected successfully\n", ns, proj, prNum)
 }

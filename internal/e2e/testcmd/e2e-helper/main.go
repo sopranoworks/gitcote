@@ -1,3 +1,5 @@
+//go:build e2e
+
 // Command e2e-helper performs setup and verification for E2E tests.
 //
 // Usage:
