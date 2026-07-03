@@ -748,3 +748,70 @@ func mkAgent(t *testing.T, root, name, role, displayName, command, prompt string
 	os.WriteFile(filepath.Join(dir, "agent.yaml"), []byte(yaml), 0o644)
 	os.WriteFile(filepath.Join(envDir, "README.md"), []byte("test"), 0o644)
 }
+
+func TestWriteMCPConfig_BothFormats(t *testing.T) {
+	workDir := t.TempDir()
+
+	err := WriteMCPConfig(workDir, map[string]MCPServerEntry{
+		"gitcote": {Type: "http", URL: "http://localhost:9999/mcp", Headers: map[string]string{"Authorization": "Bearer tok"}},
+	})
+	if err != nil {
+		t.Fatalf("WriteMCPConfig: %v", err)
+	}
+
+	claudeConfig, err := os.ReadFile(filepath.Join(workDir, ".mcp.json"))
+	if err != nil {
+		t.Fatal(".mcp.json not created")
+	}
+
+	geminiConfig, err := os.ReadFile(filepath.Join(workDir, ".gemini", "settings.json"))
+	if err != nil {
+		t.Fatal(".gemini/settings.json not created")
+	}
+
+	if string(claudeConfig) != string(geminiConfig) {
+		t.Error(".mcp.json and .gemini/settings.json content differ")
+	}
+
+	if !strings.Contains(string(claudeConfig), `"gitcote"`) {
+		t.Error("config missing gitcote server entry")
+	}
+	if !strings.Contains(string(claudeConfig), `"Bearer tok"`) {
+		t.Error("config missing auth header")
+	}
+}
+
+func TestBuiltinGeminiConfigs(t *testing.T) {
+	configs, err := ScanAgentConfigs("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reviewer := configs.FindByName("default_gemini_reviewer")
+	if reviewer == nil {
+		t.Fatal("default_gemini_reviewer not found")
+	}
+	if reviewer.Role != "reviewer" {
+		t.Errorf("reviewer role = %q, want reviewer", reviewer.Role)
+	}
+	if !strings.Contains(reviewer.Command, "--yolo") {
+		t.Errorf("reviewer command missing --yolo: %s", reviewer.Command)
+	}
+	if !strings.Contains(reviewer.Command, "--skip-trust") {
+		t.Errorf("reviewer command missing --skip-trust: %s", reviewer.Command)
+	}
+
+	merger := configs.FindByName("default_gemini_merger")
+	if merger == nil {
+		t.Fatal("default_gemini_merger not found")
+	}
+	if merger.Role != "merger" {
+		t.Errorf("merger role = %q, want merger", merger.Role)
+	}
+	if !strings.Contains(merger.Command, "--yolo") {
+		t.Errorf("merger command missing --yolo: %s", merger.Command)
+	}
+	if !strings.Contains(merger.Prompt, "$GIT_URL") {
+		t.Errorf("merger prompt missing $GIT_URL: %s", merger.Prompt)
+	}
+}

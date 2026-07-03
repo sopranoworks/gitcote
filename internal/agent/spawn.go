@@ -95,7 +95,14 @@ func WriteMCPConfig(workDir string, servers map[string]MCPServerEntry) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(workDir, ".mcp.json"), data, 0o644)
+	if err := os.WriteFile(filepath.Join(workDir, ".mcp.json"), data, 0o644); err != nil {
+		return err
+	}
+	geminiDir := filepath.Join(workDir, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(geminiDir, "settings.json"), data, 0o644)
 }
 
 type MCPServerEntry struct {

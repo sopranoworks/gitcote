@@ -1,8 +1,7 @@
 agent:
   role: reviewer
   display_name: "Reviewer (gemini)"
-  # gemini-cli permission bypass: configure sandbox mode or tool allowlists externally
-  command: 'gemini -p "$PROMPT"'
+  command: 'gemini --yolo --skip-trust -p "$PROMPT"'
   prompt: |
     Review PR $PR_ID ($SOURCE_BRANCH → $TARGET_BRANCH).
 
