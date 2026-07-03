@@ -52,6 +52,7 @@ func main() {
 		Metafile: true,
 		Write:    true,
 		Plugins: []esbuild.Plugin{
+			webCorePlugin(),
 			compatPlugin(),
 			esbuildplugin.New(index),
 		},
@@ -88,6 +89,43 @@ func main() {
 	}
 
 	fmt.Println("build/frontend: done")
+}
+
+// webCorePlugin resolves @shoka/web-core imports to the local node_modules
+// source so esbuild applies its global loader mapping (.module.css → LocalCSS).
+// Without this, the npmgo plugin serves all .css as plain CSS, breaking CSS
+// module scoping.
+func webCorePlugin() esbuild.Plugin {
+	webCoreSrc, _ := filepath.Abs("web/node_modules/@shoka/web-core/src")
+
+	exports := map[string]string{
+		".":                    "index.ts",
+		"./tokens.css":         "styles/tokens.css",
+		"./pages/SettingsPage": "pages/SettingsPage.tsx",
+	}
+
+	return esbuild.Plugin{
+		Name: "web-core",
+		Setup: func(build esbuild.PluginBuild) {
+			build.OnResolve(esbuild.OnResolveOptions{Filter: `^@shoka/web-core`}, func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {
+				subpath := strings.TrimPrefix(args.Path, "@shoka/web-core")
+				if subpath == "" {
+					subpath = "."
+				} else {
+					subpath = "." + subpath
+				}
+
+				if target, ok := exports[subpath]; ok {
+					return esbuild.OnResolveResult{
+						Path: filepath.Join(webCoreSrc, target),
+					}, nil
+				}
+
+				resolved := filepath.Join(webCoreSrc, strings.TrimPrefix(subpath, "./"))
+				return esbuild.OnResolveResult{Path: resolved}, nil
+			})
+		},
+	}
 }
 
 // compatPlugin resolves Node.js subpath imports (#-prefixed).
