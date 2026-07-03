@@ -1,3 +1,32 @@
+// Clipboard API polyfill for non-secure contexts (HTTP on non-localhost).
+// Web-core's CopyButton checks `navigator.clipboard` and calls writeText();
+// without this polyfill the fallback path (selectFallback) silently fails
+// because it never calls document.execCommand('copy').
+if (!navigator.clipboard) {
+  Object.defineProperty(navigator, 'clipboard', {
+    value: {
+      writeText(text: string): Promise<void> {
+        return new Promise((resolve, reject) => {
+          const ta = document.createElement('textarea')
+          ta.value = text
+          ta.style.position = 'fixed'
+          ta.style.opacity = '0'
+          document.body.appendChild(ta)
+          ta.select()
+          try {
+            if (document.execCommand('copy')) { resolve() } else { reject(new Error('copy failed')) }
+          } catch (e) { reject(e as Error) }
+          finally { document.body.removeChild(ta) }
+        })
+      },
+      readText(): Promise<string> {
+        return Promise.reject(new Error('Clipboard.readText unavailable in non-secure context'))
+      },
+    },
+    configurable: true,
+  })
+}
+
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
