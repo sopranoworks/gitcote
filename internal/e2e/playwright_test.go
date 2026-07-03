@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,10 +29,8 @@ func TestPlaywrightE2E(t *testing.T) {
 	pwVersion := readPWVersion(t, webDir)
 	image := "mcr.microsoft.com/playwright:v" + pwVersion + "-noble"
 
-	tmpParent := t.TempDir()
-	tmpRoot := filepath.Join(tmpParent, "gitcote")
+	tmpRoot := filepath.Join(t.TempDir(), "gitcote")
 	copyTree(t, root, tmpRoot)
-	copyExternalSymlinkTargets(t, root, tmpParent, tmpRoot)
 
 	goroot := runtime.GOROOT()
 	gopath := envOr("GOPATH", filepath.Join(home(), "go"))
@@ -46,7 +43,7 @@ func TestPlaywrightE2E(t *testing.T) {
 	args := []string{
 		"run", "--rm",
 		"--ipc=host", "--network=host",
-		"-v", tmpParent + ":" + tmpParent,
+		"-v", tmpRoot + ":" + tmpRoot,
 		"-v", goroot + ":" + goroot + ":ro",
 		"-v", goPkgDir + ":" + goPkgDir + ":ro",
 		"-v", gopath + ":/root/go",
@@ -70,11 +67,11 @@ func TestPlaywrightE2E(t *testing.T) {
 		t.Log(string(output))
 	}
 
-	chown := exec.Command("docker", "run", "--rm",
-		"-v", tmpParent+":"+tmpParent,
-		"alpine", "chmod", "-R", "a+rwX", tmpParent)
-	if out, err := chown.CombinedOutput(); err != nil {
-		t.Logf("chown cleanup: %v\n%s", err, out)
+	cleanup := exec.Command("docker", "run", "--rm",
+		"-v", tmpRoot+":"+tmpRoot,
+		"alpine", "chmod", "-R", "a+rwX", tmpRoot)
+	if out, err := cleanup.CombinedOutput(); err != nil {
+		t.Logf("cleanup chmod: %v\n%s", err, out)
 	}
 
 	reportPath := filepath.Join(resultDir, "report.json")
@@ -110,78 +107,6 @@ func copyTree(t *testing.T, src, dst string) {
 	cmd := exec.Command("rsync", "-a", "--exclude=.git", "--exclude=playwright-failures", src+"/", dst+"/")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("rsync source tree to temp: %v\n%s", err, out)
-	}
-	fixAbsSymlinks(t, src, dst)
-}
-
-func fixAbsSymlinks(t *testing.T, origRoot, newRoot string) {
-	t.Helper()
-	prefix := origRoot + "/"
-	fixed := 0
-	_ = filepath.WalkDir(newRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.Type()&fs.ModeSymlink == 0 {
-			return nil
-		}
-		target, err := os.Readlink(path)
-		if err != nil || !strings.HasPrefix(target, prefix) {
-			return nil
-		}
-		newTarget := newRoot + target[len(origRoot):]
-		_ = os.Remove(path)
-		if err := os.Symlink(newTarget, path); err != nil {
-			t.Logf("fixAbsSymlinks: could not rewrite %s: %v", path, err)
-		}
-		fixed++
-		return nil
-	})
-	if fixed > 0 {
-		t.Logf("fixAbsSymlinks: rewrote %d absolute symlinks", fixed)
-	}
-}
-
-// copyExternalSymlinkTargets walks the temp copy looking for relative symlinks
-// whose targets escape the tree (e.g. ../../../../shoka/packages/web-core).
-// For each, it resolves the target against the original source tree's parent,
-// then rsyncs that target into the matching location under tmpParent so the
-// relative symlink resolves correctly inside Docker.
-func copyExternalSymlinkTargets(t *testing.T, origRoot, tmpParent, tmpRoot string) {
-	t.Helper()
-	origParent := filepath.Dir(origRoot)
-	copied := 0
-	_ = filepath.WalkDir(tmpRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.Type()&fs.ModeSymlink == 0 {
-			return nil
-		}
-		target, err := os.Readlink(path)
-		if err != nil || filepath.IsAbs(target) {
-			return nil
-		}
-		abs := filepath.Clean(filepath.Join(filepath.Dir(path), target))
-		if strings.HasPrefix(abs, tmpRoot+"/") || abs == tmpRoot {
-			return nil
-		}
-		rel, err := filepath.Rel(tmpParent, abs)
-		if err != nil {
-			return nil
-		}
-		origAbs := filepath.Join(origParent, rel)
-		if _, serr := os.Stat(origAbs); serr != nil {
-			return nil
-		}
-		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			t.Logf("copyExternalSymlinkTargets: mkdir %s: %v", filepath.Dir(abs), err)
-			return nil
-		}
-		cmd := exec.Command("rsync", "-a", "--exclude=.git", origAbs+"/", abs+"/")
-		if out, cerr := cmd.CombinedOutput(); cerr != nil {
-			t.Logf("copyExternalSymlinkTargets: rsync %s: %v\n%s", origAbs, cerr, out)
-			return nil
-		}
-		copied++
-		return nil
-	})
-	if copied > 0 {
-		t.Logf("copyExternalSymlinkTargets: copied %d external targets", copied)
 	}
 }
 
