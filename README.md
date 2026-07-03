@@ -3,10 +3,10 @@
 [![version](https://img.shields.io/badge/version-1.0.0--rc1-blue)](#)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-GitCote is an agent-oriented Git staging yard — a private intermediary between
-coding agents and seed (master) repositories. Agents push work to GitCote over
-Smart HTTP; an operator reviews and approves pull requests; GitCote pushes
-approved changes onward to the seed repository via SSH. Built on
+GitCote is an agent-oriented Git host — a dovecote where coding agents come and
+go, converging work into one place. Agents push to GitCote over Smart HTTP; an
+operator reviews and approves pull requests; GitCote dispatches approved changes
+onward to seed (master) repositories via SSH. Built on
 [Shoka](https://github.com/sopranoworks/shoka)'s core (OAuth, MCP, user
 management, namespace isolation). Pure Go — no external Git binary.
 
@@ -33,6 +33,53 @@ Repositories are isolated on the filesystem as `<base_dir>/<namespace>/<project>
   configuration, sync status badges, vault resume banner.
 - **Multi-user auth** — password + TOTP login, first-run admin bootstrap,
   namespace-scoped grants.
+
+## Install
+
+Four ways to install GitCote, in order of preference for a server:
+
+- **Debian/Ubuntu `.deb` — recommended for Linux servers.** Download the package
+  for your architecture (`amd64` or `arm64`) from the
+  [GitHub Releases](https://github.com/sopranoworks/gitcote/releases) page and install it:
+
+  ```sh
+  sudo apt install ./gitcote_<version>_<arch>.deb
+  ```
+
+  This installs the `gitcote` binary to `/usr/bin`, an `/etc/gitcote/gitcote.yaml`
+  config, a systemd unit, and a `/var/lib/gitcote` data directory owned by a
+  dedicated `gitcote` user (it does **not** auto-start). Then edit the config and
+  `sudo systemctl enable --now gitcote`. Full walkthrough:
+  [`docs/OPERATIONS.md`](docs/OPERATIONS.md) (*Installation*).
+
+- **`fuigo` — any platform with a Go toolchain.** GitCote embeds a frontend built
+  with npmgo + esbuild; `go install` alone cannot run these pre-build steps.
+  [fuigo](https://github.com/sopranoworks/fuigo) handles them automatically:
+
+  ```sh
+  go install github.com/sopranoworks/fuigo/cmd/fuigo@latest
+  fuigo github.com/sopranoworks/gitcote/cmd/gitcote@latest
+  ```
+
+  fuigo reads the `fuigo.yaml` in the repository, runs the declared frontend build
+  steps (npmgo + esbuild), then `go install`s the result. It lands in `~/go/bin`
+  (`$(go env GOBIN)` — put it on your `PATH`).
+
+- **`go install` — without the frontend.** If you only need the Git hosting and
+  MCP surface (no web UI):
+
+  ```sh
+  go install github.com/sopranoworks/gitcote/cmd/gitcote@latest
+  ```
+
+  The binary will work, but the web UI will be empty because `go install` skips
+  the frontend build. Use fuigo (above) for a complete install.
+
+- **Homebrew (macOS) — planned.** A source formula for `brew install` /
+  `brew services` is planned; none is published yet. On macOS today, use fuigo or
+  build from source (*Quick start* below).
+
+To build and run from source for development, see *Quick start* below.
 
 ## Quick start
 
