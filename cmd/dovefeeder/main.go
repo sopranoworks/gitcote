@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sopranoworks/gitcote/internal/agent"
+	"github.com/sopranoworks/gitcote/pkg/agent"
 	"github.com/sopranoworks/gitcote/internal/version"
 )
 
