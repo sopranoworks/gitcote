@@ -129,13 +129,18 @@ external TLS-terminating reverse proxy (nginx, etc.).
 | Audience | Document |
 |----------|----------|
 | Running & configuring | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) |
+| Agents integrating with GitCote | [`docs/agents/README.md`](docs/agents/README.md) |
+| Agent patterns & pitfalls | [`docs/agents/using-gitcote.md`](docs/agents/using-gitcote.md) |
+| PR lifecycle for agents | [`docs/agents/pr-workflow.md`](docs/agents/pr-workflow.md) |
+| Agent template reference | [`docs/agents/agent-templates.md`](docs/agents/agent-templates.md) |
 | dovefeeder CLI | [`docs/dovefeeder.md`](docs/dovefeeder.md) |
 
 The configuration reference, build instructions, first-run walkthrough, OAuth
 setup, Git hosting, SSH key management, seed sync, and MCP tool reference are
-all in [`docs/OPERATIONS.md`](docs/OPERATIONS.md). The dovefeeder CLI tool for
-spawning coding agents is documented in
-[`docs/dovefeeder.md`](docs/dovefeeder.md).
+all in [`docs/OPERATIONS.md`](docs/OPERATIONS.md). Agent-facing documentation
+(MCP tool usage, PR workflow, templates) is in
+[`docs/agents/`](docs/agents/README.md). The dovefeeder CLI tool for spawning
+coding agents is documented in [`docs/dovefeeder.md`](docs/dovefeeder.md).
 
 ## Tech stack
 
