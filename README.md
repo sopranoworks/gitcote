@@ -81,6 +81,29 @@ Four ways to install GitCote, in order of preference for a server:
 
 To build and run from source for development, see *Quick start* below.
 
+## Agent CLI credentials
+
+After installing GitCote, authenticate each AI coding tool under the service user
+so spawned agents can access their credentials:
+
+```sh
+sudo -u gitcote claude login        # Anthropic Claude Code
+sudo -u gitcote gemini auth login   # Google Gemini CLI
+```
+
+For OpenAI Codex, set `OPENAI_API_KEY` in the systemd environment instead:
+
+```sh
+sudo systemctl edit gitcote
+# Add under [Service]:
+#   Environment=OPENAI_API_KEY=sk-...
+```
+
+Credentials are stored under `/var/lib/gitcote/.config/` and are accessible by
+the GitCote service and spawned agents.
+
+This step is required once per tool. Re-run if the session expires.
+
 ## Quick start
 
 GitCote is a Go program. Build it and run it against a config file:

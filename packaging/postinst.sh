@@ -27,6 +27,25 @@ case "$1" in
 
     echo "gitcote: installed. Edit /etc/gitcote/gitcote.yaml, then enable + start with:"
     echo "           sudo systemctl enable --now gitcote"
+
+    # Print credential setup notice on fresh install only ($2 is empty)
+    if [ -z "$2" ]; then
+      echo "" >&2
+      echo "=== GitCote post-install notice ===" >&2
+      echo "" >&2
+      echo "To enable AI agent spawning, authenticate CLI tools" >&2
+      echo "under the gitcote service user:" >&2
+      echo "" >&2
+      echo "  sudo -u gitcote claude login        # Claude Code" >&2
+      echo "  sudo -u gitcote gemini auth login   # Gemini CLI" >&2
+      echo "" >&2
+      echo "For OpenAI Codex, set OPENAI_API_KEY via:" >&2
+      echo "  sudo systemctl edit gitcote" >&2
+      echo "" >&2
+      echo "This is required once per tool." >&2
+      echo "===================================" >&2
+      echo "" >&2
+    fi
     ;;
 esac
 
