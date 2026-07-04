@@ -15,5 +15,12 @@ Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45
 
+# Hardening
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/gitcote
+
 [Install]
 WantedBy=multi-user.target

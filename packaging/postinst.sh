@@ -16,6 +16,11 @@ case "$1" in
       chmod 0750 /var/lib/gitcote || true
     fi
 
+    if [ -f /etc/gitcote/gitcote.yaml ]; then
+      chown root:gitcote /etc/gitcote/gitcote.yaml || true
+      chmod 0640 /etc/gitcote/gitcote.yaml || true
+    fi
+
     if [ -d /run/systemd/system ]; then
       systemctl daemon-reload || true
     fi
