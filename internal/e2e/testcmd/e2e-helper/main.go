@@ -176,6 +176,10 @@ func runSetupSeed(baseDir, ns, proj, seedURL, vaultPassword, seedMergerAgent str
 				AgentEnabled: &agentEnabled,
 				AgentName:    seedMergerAgent,
 			},
+			OnPushConflict: &integrity.EventAction{
+				AgentEnabled: &agentEnabled,
+				AgentName:    seedMergerAgent,
+			},
 		}
 		if err := intStore.SetGlobalSeedEventSettings(seedSettings); err != nil {
 			return fmt.Errorf("set seed event settings: %w", err)

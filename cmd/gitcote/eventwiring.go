@@ -780,6 +780,28 @@ func onSeedPullConflict(ec *eventContext, ns, proj, tempDir string, conflictFile
 	}
 }
 
+// onSeedPushConflict fires when a seed push detects conflicts.
+func onSeedPushConflict(ec *eventContext, ns, proj, tempDir string, conflictFiles []string) {
+	if ec.integrityHS == nil {
+		return
+	}
+	global, _ := ec.integrityHS.GetGlobalSeedEventSettings()
+	project, _ := ec.integrityHS.GetProjectSeedEventSettings(ns, proj)
+
+	var globalAction, projectAction *integrity.EventAction
+	if global != nil {
+		globalAction = global.OnPushConflict
+	}
+	if project != nil {
+		projectAction = project.OnPushConflict
+	}
+
+	action := integrity.ResolveEventAction(projectAction, globalAction)
+	if action.AgentEnabled {
+		go spawnAgentForSeedSync(ec, action, ns, proj, tempDir, conflictFiles)
+	}
+}
+
 // spawnAgentForSeedSync finds the appropriate merger agent and executes it for seed sync conflict resolution.
 func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventAction, ns, proj, tempDir string, conflictFiles []string) {
 	if !ec.agentCfg.IsEnabled() {
@@ -1050,6 +1072,23 @@ func seedPullConflictAgentEnabled(ec *eventContext, ns, proj string) bool {
 	}
 	if project != nil {
 		projectAction = project.OnPullConflict
+	}
+	action := integrity.ResolveEventAction(projectAction, globalAction)
+	return action.AgentEnabled
+}
+
+func seedPushConflictAgentEnabled(ec *eventContext, ns, proj string) bool {
+	if ec.integrityHS == nil {
+		return false
+	}
+	global, _ := ec.integrityHS.GetGlobalSeedEventSettings()
+	project, _ := ec.integrityHS.GetProjectSeedEventSettings(ns, proj)
+	var globalAction, projectAction *integrity.EventAction
+	if global != nil {
+		globalAction = global.OnPushConflict
+	}
+	if project != nil {
+		projectAction = project.OnPushConflict
 	}
 	action := integrity.ResolveEventAction(projectAction, globalAction)
 	return action.AgentEnabled

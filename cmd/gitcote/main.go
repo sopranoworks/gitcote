@@ -324,7 +324,7 @@ func run(cfg *Config, logger *slog.Logger) error {
 	mcpServer := setupMCPServer(cfg, gitStore, seedCtx, gitcoteURL, integrityHS, evtCtx, logger)
 
 	// ---- Seed push scheduler (periodic mode) ----
-	startSeedScheduler(ctx, seedCtx, logger)
+	startSeedScheduler(ctx, seedCtx, evtCtx, logger)
 
 	// ---- Repository integrity check worker ----
 	startIntegrityWorker(ctx, gitStore, integrityHS, cfg.Server.IntegrityCheck, integrityStatus, func(alert IntegrityAlert) {

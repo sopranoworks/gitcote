@@ -1135,7 +1135,7 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 
 	sc := ec.seedCtx
 	if sc != nil {
-		go triggerOnMergePush(sc, p.Namespace, p.ProjectName, pullReq.TargetBranch)
+		go triggerOnMergePush(sc, ec, p.Namespace, p.ProjectName, pullReq.TargetBranch)
 	}
 
 	c.SendResponse(MsgPRMerge, map[string]interface{}{

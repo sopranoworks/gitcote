@@ -81,7 +81,7 @@ func seedDispatch(c *uiws.Client, sc *seedContext, ec *eventContext, msgType uiw
 	case MsgSeedTest:
 		handleSeedTest(c, sc, payload)
 	case MsgSeedPush:
-		handleSeedPushWS(c, sc, payload)
+		handleSeedPushWS(c, sc, ec, payload)
 	case MsgSeedPull:
 		handleSeedPullWS(c, sc, ec, payload)
 	case MsgSeedResume:
@@ -296,13 +296,13 @@ func handleSeedTest(c *uiws.Client, sc *seedContext, payload json.RawMessage) {
 	c.SendResponse(MsgSeedTest, map[string]interface{}{"success": true})
 }
 
-func handleSeedPushWS(c *uiws.Client, sc *seedContext, payload json.RawMessage) {
+func handleSeedPushWS(c *uiws.Client, sc *seedContext, ec *eventContext, payload json.RawMessage) {
 	var p seedPushPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
 		c.SendError("invalid payload")
 		return
 	}
-	err := executeSeedPush(sc, p.Namespace, p.ProjectName, p.Branch)
+	err := executeSeedPush(sc, ec, p.Namespace, p.ProjectName, p.Branch)
 	if err != nil {
 		c.SendResponse(MsgSeedPush, map[string]interface{}{"success": false, "error": err.Error()})
 		return
@@ -517,21 +517,58 @@ type SeedPushResult struct {
 	TempCloneDir string
 }
 
-func executeSeedPush(sc *seedContext, namespace, projectName, branch string) error {
-	r := executeSeedPushWithMerge(sc, namespace, projectName, branch)
+func executeSeedPush(sc *seedContext, ec *eventContext, namespace, projectName, branch string) error {
+	r := executeSeedPushWithMerge(sc, ec, namespace, projectName, branch)
 	if !r.Success {
 		return fmt.Errorf("%s", r.Message)
 	}
 	return nil
 }
 
-func executeSeedPushWithMerge(sc *seedContext, namespace, projectName, branch string) SeedPushResult {
+func executeSeedPushWithMerge(sc *seedContext, ec *eventContext, namespace, projectName, branch string) SeedPushResult {
 	if sc.vault.State() != vault.VaultUnlocked {
 		return SeedPushResult{Message: "vault is locked — resume required"}
 	}
 	if branch == "" {
 		branch = "main"
 	}
+
+	// Acquire PR queue slot for mutual exclusion with PR processing.
+	queued := false
+	if ec != nil && ec.integrityHS != nil {
+		isActive, qerr := ec.integrityHS.EnqueuePriority(namespace, projectName, integrity.SeedSyncSentinel)
+		if qerr != nil {
+			return SeedPushResult{Message: fmt.Sprintf("queue: %v", qerr)}
+		}
+		if !isActive {
+			queued = true
+			slog.Default().Info("seed push queued, waiting for active PR to complete",
+				"namespace", namespace, "project", projectName)
+		}
+	}
+	if queued {
+		return SeedPushResult{
+			Status:  "queued",
+			Message: "seed push queued — a PR is being processed, will execute when slot is free",
+		}
+	}
+
+	result := doSeedPush(sc, ec, namespace, projectName, branch)
+
+	// Release queue slot on success or non-conflict failure.
+	if ec != nil && ec.integrityHS != nil {
+		if result.Success || (result.Status != "conflict" && result.Status != "queued") {
+			releaseSeedSyncSlot(ec, namespace, projectName)
+		}
+		if result.Status == "conflict" && !seedPushConflictAgentEnabled(ec, namespace, projectName) {
+			releaseSeedSyncSlot(ec, namespace, projectName)
+		}
+	}
+
+	return result
+}
+
+func doSeedPush(sc *seedContext, ec *eventContext, namespace, projectName, branch string) SeedPushResult {
 	projPath, err := sc.gitStore.ProjectPath(namespace, projectName)
 	if err != nil {
 		return SeedPushResult{Message: err.Error()}
@@ -591,8 +628,10 @@ func executeSeedPushWithMerge(sc *seedContext, namespace, projectName, branch st
 			return SeedPushResult{Success: true, Status: "up-to-date", Message: "already up to date"}
 		case "conflict":
 			var conflicts []conflictInfoWire
+			var conflictPaths []string
 			for _, c := range mr.Conflicts {
 				conflicts = append(conflicts, conflictInfoWire{Path: c.Path, Type: c.Type})
+				conflictPaths = append(conflictPaths, c.Path)
 			}
 			result := SeedPushResult{Status: "conflict", Message: "push conflicts", Conflicts: conflicts}
 			gitcoteURL := buildGitcoteCloneURL(sc, namespace, projectName)
@@ -604,6 +643,9 @@ func executeSeedPushWithMerge(sc *seedContext, namespace, projectName, branch st
 						Namespace: namespace, Project: projectName,
 						Path: tempDir, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 					})
+				}
+				if ec != nil {
+					go onSeedPushConflict(ec, namespace, projectName, tempDir, conflictPaths)
 				}
 			}
 			now := time.Now()
@@ -628,7 +670,7 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 		Description: "Push a branch to the configured seed repository via SSH. Auto-merges if seed has diverged cleanly; reports conflicts otherwise.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in pushToSeedInput) (*mcp.CallToolResult, pushToSeedOutput, error) {
 		sc := &seedContext{gitStore: gitStore, vault: v, gitcoteURL: gitcoteURL}
-		r := executeSeedPushWithMerge(sc, in.Namespace, in.ProjectName, in.Branch)
+		r := executeSeedPushWithMerge(sc, ec, in.Namespace, in.ProjectName, in.Branch)
 		return nil, pushToSeedOutput{
 			Success:      r.Success,
 			Message:      r.Message,
@@ -750,7 +792,7 @@ type getSeedStatusOutput struct {
 
 // startSeedScheduler starts a background goroutine that periodically pushes
 // projects configured with push_mode=periodic to their seed repositories.
-func startSeedScheduler(ctx context.Context, sc *seedContext, logger *slog.Logger) {
+func startSeedScheduler(ctx context.Context, sc *seedContext, ec *eventContext, logger *slog.Logger) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
@@ -760,13 +802,13 @@ func startSeedScheduler(ctx context.Context, sc *seedContext, logger *slog.Logge
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				runPeriodicPush(sc, logger)
+				runPeriodicPush(sc, ec, logger)
 			}
 		}
 	}()
 }
 
-func runPeriodicPush(sc *seedContext, logger *slog.Logger) {
+func runPeriodicPush(sc *seedContext, ec *eventContext, logger *slog.Logger) {
 	if sc.vault.State() != vault.VaultUnlocked || !sc.resumed {
 		return
 	}
@@ -802,7 +844,7 @@ func runPeriodicPush(sc *seedContext, logger *slog.Logger) {
 			}
 		}
 
-		if err := executeSeedPush(sc, p.Namespace, p.Project, ""); err != nil {
+		if err := executeSeedPush(sc, ec, p.Namespace, p.Project, ""); err != nil {
 			logger.Warn("seed scheduler: push failed",
 				"namespace", p.Namespace, "project", p.Project, "error", err)
 			continue
@@ -815,7 +857,7 @@ func runPeriodicPush(sc *seedContext, logger *slog.Logger) {
 }
 
 // triggerOnMergePush checks the project's seed config and pushes if on-merge mode is active.
-func triggerOnMergePush(sc *seedContext, namespace, project, branch string) {
+func triggerOnMergePush(sc *seedContext, ec *eventContext, namespace, project, branch string) {
 	if sc.vault.State() != vault.VaultUnlocked || !sc.resumed {
 		return
 	}
@@ -830,7 +872,7 @@ func triggerOnMergePush(sc *seedContext, namespace, project, branch string) {
 	if cfg.SeedURL == "" || cfg.KeyName == "" {
 		return
 	}
-	if err := executeSeedPush(sc, namespace, project, branch); err != nil {
+	if err := executeSeedPush(sc, ec, namespace, project, branch); err != nil {
 		slog.Default().Warn("on-merge push: push failed",
 			"namespace", namespace, "project", project, "branch", branch, "error", err)
 		return
