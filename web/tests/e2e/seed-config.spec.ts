@@ -71,6 +71,11 @@ test.describe('Seed configuration', () => {
     await projSection.getByRole('button', { name: 'Save' }).click()
 
     await expect(page.getByText('Seed config saved')).toBeVisible({ timeout: 10000 })
+
+    await page.reload()
+    const reloaded = page.locator('[data-testid="proj-sections-seedns-seedproj"]')
+    await expect(reloaded).toBeVisible({ timeout: 5000 })
+    await expect(reloaded.locator('input[placeholder*="github"]')).toHaveValue('git@github.com:test/repo.git', { timeout: 5000 })
   })
 
   test('sync status badge shows for project', async ({ page }) => {

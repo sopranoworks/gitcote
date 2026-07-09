@@ -134,10 +134,13 @@ test.describe('File view & search', () => {
     }
   })
 
-  test('copy button works on a repo file', async ({ page }) => {
+  test('copy button works on a repo file', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
     await page.goto(`/p/${ns}/${proj}/blob/hello.ts`)
     await expect(page.locator('[data-testid="copy-path-button"]')).toBeVisible({ timeout: 10000 })
     await page.locator('[data-testid="copy-path-button"]').click({ force: true })
+    const clip = await page.evaluate(() => navigator.clipboard.readText())
+    expect(clip).toContain('hello.ts')
     await screenshot(page, 'gitcote-file-copy-button.png')
   })
 

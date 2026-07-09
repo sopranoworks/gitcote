@@ -3,6 +3,18 @@ import { useQuery } from '@tanstack/react-query'
 import { serverSshInfo } from '../ops/userSshKeyOps'
 import styles from './CloneUrl.module.css'
 
+function selectFallback(text: string): boolean {
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.position = 'fixed'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.select()
+  const ok = document.execCommand('copy')
+  document.body.removeChild(ta)
+  return ok
+}
+
 export function CloneUrl({ namespace, project }: { namespace: string; project: string }) {
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
   const base = window.location.origin
@@ -24,13 +36,20 @@ export function CloneUrl({ namespace, project }: { namespace: string; project: s
     }
   }
 
-  async function handleCopy(url: string, idx: number) {
-    try {
-      await navigator.clipboard.writeText(url)
+  function handleCopy(url: string, idx: number) {
+    const markCopied = () => {
       setCopiedIdx(idx)
       setTimeout(() => setCopiedIdx(null), 2000)
-    } catch {
-      // fallback
+    }
+    if (navigator.clipboard) {
+      navigator.clipboard
+        .writeText(url)
+        .then(() => markCopied())
+        .catch(() => {
+          if (selectFallback(url)) markCopied()
+        })
+    } else {
+      if (selectFallback(url)) markCopied()
     }
   }
 
