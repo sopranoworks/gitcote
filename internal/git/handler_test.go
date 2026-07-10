@@ -282,11 +282,20 @@ func TestIsValidName(t *testing.T) {
 	}{
 		{"hello", true},
 		{"Hello_World-123", true},
+		{"vue.js", true},
+		{"node.js", true},
+		{"socket.io", true},
+		{"babel.config", true},
+		{"foo.prs.db", true},
+		{"foo.prs", true},
 		{"", false},
 		{"has space", false},
 		{"has/slash", false},
-		{"has.dot", false},
-		{".hidden", false},
+		{".", false},
+		{"..", false},
+		{"name.git", false},
+		{"@prefixed", false},
+		{"has@sign", false},
 	} {
 		t.Run(fmt.Sprintf("%q", tt.in), func(t *testing.T) {
 			if got := git.IsValidName(tt.in); got != tt.want {
@@ -296,36 +305,66 @@ func TestIsValidName(t *testing.T) {
 	}
 }
 
-// TestDotInNamePreventsCollision proves that disallowing dots in project names
-// prevents sibling-DB filename collisions. If dots were allowed, project "foo"
-// would create a sibling DB file at <ns>/foo.prs.db, which collides with the
-// repo directory for a project literally named "foo.prs.db".
-func TestDotInNamePreventsCollision(t *testing.T) {
+// TestAtPrefixPreventsCollision proves that the @<project>.prs.db naming
+// scheme prevents sibling-DB collisions even when project names contain dots.
+// Project directories never start with @ so they cannot collide with
+// @-prefixed sibling DB files.
+func TestAtPrefixPreventsCollision(t *testing.T) {
 	store := git.NewStore(t.TempDir())
 
-	colliders := []string{
-		"foo.prs.db",
+	pathological := []string{
+		"foo",
 		"foo.prs",
-		"bar.baz",
+		"foo.prs.db",
 		"vue.js",
 		"socket.io",
-		".hidden",
-		"name.git",
+		"babel.config",
 	}
-	for _, name := range colliders {
-		if git.IsValidName(name) {
-			t.Errorf("IsValidName(%q) = true; dot-containing names must be rejected to prevent sibling-DB collisions", name)
+	for _, name := range pathological {
+		if !git.IsValidName(name) {
+			t.Fatalf("IsValidName(%q) should be true", name)
 		}
-		if _, err := store.ProjectPath("default", name); err == nil {
-			t.Errorf("ProjectPath(default, %q) succeeded; should reject dot-containing names", name)
+		projPath, err := store.ProjectPath("default", name)
+		if err != nil {
+			t.Fatalf("ProjectPath(default, %q): %v", name, err)
+		}
+		dbPath := filepath.Join(filepath.Dir(projPath), "@"+name+".prs.db")
+		if projPath == dbPath {
+			t.Errorf("project dir and DB path collide for %q: %s", name, projPath)
+		}
+		if filepath.Base(projPath) == filepath.Base(dbPath) {
+			t.Errorf("project dir basename and DB basename collide for %q", name)
 		}
 	}
 
-	safe := []string{"foo", "foo-prs-db", "foo_prs_db", "vuejs", "socket-io"}
-	for _, name := range safe {
-		if !git.IsValidName(name) {
-			t.Errorf("IsValidName(%q) = false; sanitized names without dots should be valid", name)
+	// @ in names must be rejected to protect the prefix.
+	for _, bad := range []string{"@foo", "bar@baz", "@vue.js"} {
+		if git.IsValidName(bad) {
+			t.Errorf("IsValidName(%q) = true; @ must be rejected", bad)
 		}
+	}
+}
+
+// TestDottedProjectPRRoundTrip verifies that dotted project names can create
+// repos and that the @-prefixed PR DB paths are distinct per project.
+func TestDottedProjectPRRoundTrip(t *testing.T) {
+	baseDir := t.TempDir()
+	store := git.NewStore(baseDir)
+
+	projects := []string{"vue.js", "node.js", "socket.io", "plain"}
+	for _, proj := range projects {
+		if err := store.CreateRepo("default", proj); err != nil {
+			t.Fatalf("CreateRepo(default, %q): %v", proj, err)
+		}
+	}
+
+	seen := map[string]string{}
+	for _, proj := range projects {
+		dbPath := filepath.Join(baseDir, "default", "@"+proj+".prs.db")
+		if prev, ok := seen[dbPath]; ok {
+			t.Fatalf("DB path collision: %q and %q both map to %s", prev, proj, dbPath)
+		}
+		seen[dbPath] = proj
 	}
 }
 

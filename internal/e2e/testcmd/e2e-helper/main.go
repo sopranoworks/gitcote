@@ -198,7 +198,7 @@ func runSetupSeed(baseDir, ns, proj, seedURL, vaultPassword, seedMergerAgent str
 }
 
 func runCheck(baseDir, ns, proj, expectState string) error {
-	prStore, err := pr.Open(fmt.Sprintf("%s/%s/%s.prs.db", baseDir, ns, proj))
+	prStore, err := pr.Open(fmt.Sprintf("%s/%s/@%s.prs.db", baseDir, ns, proj))
 	if err != nil {
 		return fmt.Errorf("open PR store: %w", err)
 	}

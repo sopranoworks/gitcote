@@ -36,16 +36,22 @@ func getPRStore(baseDir, namespace, project string) (*pr.Store, error) {
 	if s, ok := prStores[key]; ok {
 		return s, nil
 	}
-	newPath := filepath.Join(baseDir, namespace, project+".prs.db")
-	oldPath := filepath.Join(baseDir, namespace, project, "prs.db")
-	if _, err := os.Stat(newPath); os.IsNotExist(err) {
-		if _, err := os.Stat(oldPath); err == nil {
-			if err := os.Rename(oldPath, newPath); err != nil {
-				return nil, fmt.Errorf("migrate prs.db: %w", err)
+	dbPath := filepath.Join(baseDir, namespace, "@"+project+".prs.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		legacyPaths := []string{
+			filepath.Join(baseDir, namespace, project+".prs.db"),
+			filepath.Join(baseDir, namespace, project, "prs.db"),
+		}
+		for _, lp := range legacyPaths {
+			if _, err := os.Stat(lp); err == nil {
+				if err := os.Rename(lp, dbPath); err != nil {
+					return nil, fmt.Errorf("migrate prs.db: %w", err)
+				}
+				break
 			}
 		}
 	}
-	s, err := pr.Open(newPath)
+	s, err := pr.Open(dbPath)
 	if err != nil {
 		return nil, err
 	}

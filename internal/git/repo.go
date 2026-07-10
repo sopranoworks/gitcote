@@ -56,16 +56,22 @@ func (s *Store) GitDir(namespace, project string) (string, error) {
 	return filepath.Join(p, ".git"), nil
 }
 
-// IsValidName checks if a name (namespace or project) contains only
-// [a-zA-Z0-9_-]. Dots are intentionally excluded despite being valid in
-// GitHub repo names: sibling-DB files (<project>.prs.db) would collide
-// with project directories if dots were allowed in names.
+// IsValidName checks if a name (namespace or project) is valid.
+// Allowed: [a-zA-Z0-9_-.], matching GitHub repo naming rules.
+// Rejected: empty, longer than 100 chars, bare "." or "..", names ending
+// in ".git", and names containing "@" (reserved for sibling-DB prefix).
 func IsValidName(name string) bool {
-	if name == "" {
+	if name == "" || len(name) > 100 {
+		return false
+	}
+	if name == "." || name == ".." {
+		return false
+	}
+	if strings.HasSuffix(name, ".git") {
 		return false
 	}
 	for _, r := range name {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.') {
 			return false
 		}
 	}
