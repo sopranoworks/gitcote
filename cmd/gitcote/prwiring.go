@@ -988,7 +988,7 @@ func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType u
 	case MsgPRList:
 		handlePRList(c, gitStore, payload)
 	case MsgPRGet:
-		handlePRGet(c, gitStore, payload)
+		handlePRGet(c, gitStore, ec, payload)
 	case MsgPRMerge:
 		handlePRMerge(c, gitStore, ec, payload)
 	case MsgPRClose:
@@ -1101,7 +1101,7 @@ type prGetPayload struct {
 	Number      uint32 `json:"number"`
 }
 
-func handlePRGet(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
+func handlePRGet(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
 	var p prGetPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
 		c.SendError("invalid payload")
@@ -1134,6 +1134,13 @@ func handlePRGet(c *uiws.Client, gitStore *git.Store, payload json.RawMessage) {
 
 	if pullReq.State == pr.StateInterrupted {
 		resp["interrupted_previous_status"] = string(pullReq.PreviousState)
+	}
+
+	// Mirrors prRetryEligible exactly (same function, not reimplemented) so
+	// the WebUI's Retry button can appear for never-attempted open PRs too,
+	// not just interrupted ones — without duplicating the eligibility logic.
+	if retryEligible, _ := prRetryEligible(ec, pullReq); retryEligible {
+		resp["retry_eligible"] = true
 	}
 
 	switch pullReq.State {

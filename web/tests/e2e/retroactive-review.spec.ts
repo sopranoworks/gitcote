@@ -97,10 +97,6 @@ async function setPREventSettings(
   await wsRequest(page, 'PR_EVENT_SETTINGS_SET_PROJECT', { namespace: ns, projectName: proj, settings })
 }
 
-async function retryPRAgent(page: Page, ns: string, proj: string, number: number) {
-  return wsRequest(page, 'PR_RETRY_AGENT', { namespace: ns, projectName: proj, number })
-}
-
 function git(cwd: string, ...args: string[]) {
   execSync(['git', ...args].map(a => `'${a}'`).join(' '), {
     cwd,
@@ -165,9 +161,10 @@ test.describe('Retroactive review recovery', () => {
     const page = await browser.newPage()
     await ensureAdminLoggedIn(page)
     await ensureProject(page, 'rar', 'demo')
-    // Deliberately do NOT configure on_created — this project has no
-    // reviewer agent set up at all, matching a fresh project before an
-    // operator has done any agent configuration.
+    await ensureProject(page, 'rarq', 'demo')
+    // Deliberately do NOT configure on_created for either project yet —
+    // matches a fresh project before an operator has done any agent
+    // configuration.
     token = await issueGitToken(page)
     await page.close()
   })
@@ -176,7 +173,7 @@ test.describe('Retroactive review recovery', () => {
     await ensureAdminLoggedIn(page)
   })
 
-  test('PR created with no reviewer configured stays open, then retry_pr_agent spawns a reviewer once configured', async ({ page }) => {
+  test('Retry button appears for a never-attempted open PR, is clickable, and actually spawns a reviewer', async ({ page }) => {
     test.setTimeout(120_000)
     const content = page.locator('#content')
 
@@ -191,22 +188,62 @@ test.describe('Retroactive review recovery', () => {
     await page.waitForTimeout(1500)
     await expect(content.getByText('No agent configured PR')).toBeVisible({ timeout: 5000 })
     await expect(content.locator('[data-state="open"]')).toBeVisible()
-    await expect(content.locator('[data-state="interrupted"]')).not.toBeVisible()
+    await expect(content.locator('[data-testid="interrupted-panel"]')).not.toBeVisible()
     await page.screenshot({ path: 'test-results/retroactive-no-agent-open.png', fullPage: false })
+
+    // This PR is the active queue entry with no prior agent attempt, so
+    // it's retry-eligible from the moment it's created — the same button
+    // used for interrupted-PR recovery must be visible here too (backend:
+    // prRetryEligible; frontend: retry_eligible on PR_GET).
+    const retryPanel = content.locator('[data-testid="retry-eligible-panel"]')
+    await expect(retryPanel).toBeVisible({ timeout: 5000 })
+    const startReviewBtn = retryPanel.getByRole('button', { name: 'Start review' })
+    await expect(startReviewBtn).toBeVisible()
+    await page.screenshot({ path: 'test-results/retroactive-retry-button-visible.png', fullPage: false })
 
     // Operator configures a reviewer agent after the fact.
     await setPREventSettings(page, 'rar', 'demo', {
       on_created: { agent_enabled: true, agent_name: 'mock_reviewer' },
       on_confirmed: { auto_confirm: false },
     })
+    await page.goto('/p/rar/demo/prs?pr=1')
+    await page.waitForTimeout(1000)
 
-    // Now the retroactive retry should succeed and actually spawn the
-    // (mock) reviewer, which approves the PR.
-    const result = await retryPRAgent(page, 'rar', 'demo', 1) as { message?: string }
-    expect(result.message).toContain('re-spawned')
+    // Click the actual button in the UI — not a direct MCP/WS call — and
+    // confirm it drives the same spawn/approval flow.
+    await content.locator('[data-testid="retry-eligible-panel"]').getByRole('button', { name: 'Start review' }).click()
 
     await waitForPRState(page, 'rar', 'demo', 1, 'approved')
     await expect(content.locator('[data-state="approved"]')).toBeVisible()
     await page.screenshot({ path: 'test-results/retroactive-review-approved.png', fullPage: false })
+  })
+
+  test('Retry button does NOT appear for a PR queued behind another (no queue-jumping from the UI)', async ({ page }) => {
+    test.setTimeout(120_000)
+    const content = page.locator('#content')
+
+    const repo = cloneAndInit(token, 'rarq', 'demo')
+    pushPR(repo, 'feat/first', 'First queued PR')
+    git(repo, 'checkout', 'main')
+    pushPR(repo, 'feat/second', 'Second queued PR')
+
+    // No agent configured at all, so PR #1 (active) never leaves 'open' —
+    // which keeps PR #2 queued behind it, exactly the scenario to check.
+    await page.waitForTimeout(5000)
+
+    await page.goto('/p/rarq/demo/prs?pr=1')
+    await page.waitForTimeout(1500)
+    await expect(content.getByText('First queued PR')).toBeVisible({ timeout: 5000 })
+    await expect(content.locator('[data-state="open"]')).toBeVisible()
+    await expect(content.locator('[data-testid="retry-eligible-panel"]')).toBeVisible({ timeout: 5000 })
+
+    await page.goto('/p/rarq/demo/prs?pr=2')
+    await page.waitForTimeout(1500)
+    await expect(content.getByText('Second queued PR')).toBeVisible({ timeout: 5000 })
+    await expect(content.locator('[data-state="open"]')).toBeVisible()
+    // PR #2 is open too, but it is NOT the active queue entry — the Retry
+    // button must not appear, or an operator could jump it ahead of PR #1.
+    await expect(content.locator('[data-testid="retry-eligible-panel"]')).not.toBeVisible()
+    await page.screenshot({ path: 'test-results/retroactive-queued-no-retry-button.png', fullPage: false })
   })
 })

@@ -47,6 +47,7 @@ export interface PRGetResponse {
   mergeable?: boolean
   conflicts?: ConflictInfo[]
   interrupted_previous_status?: string
+  retry_eligible?: boolean
 }
 
 export function prList(
