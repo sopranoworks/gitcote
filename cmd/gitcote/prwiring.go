@@ -1137,6 +1137,15 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 		c.SendError("invalid payload")
 		return
 	}
+
+	if ec.integrityHS != nil {
+		q, qerr := ec.integrityHS.GetPRQueue(p.Namespace, p.ProjectName)
+		if qerr == nil && q.ActivePR == integrity.SeedSyncSentinel {
+			c.SendError("seed sync is in progress or interrupted for this project — resolve (retry or dismiss) the seed sync before merging PRs")
+			return
+		}
+	}
+
 	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
 	if err != nil {
 		c.SendError(err.Error())

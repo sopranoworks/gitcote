@@ -103,11 +103,12 @@ func TestSeedPushConflict_QueueAndAgentWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	agentDisabled := false
 	evtCtx := &eventContext{
 		gitStore:    gitStore,
 		integrityHS: integrityStore,
 		oauthStore:  oauthSt,
-		agentCfg:    AgentSpawnConfig{},
+		agentCfg:    AgentSpawnConfig{Enabled: &agentDisabled},
 		logger:      logger,
 	}
 
@@ -159,30 +160,23 @@ func TestSeedPushConflict_QueueAndAgentWiring(t *testing.T) {
 	}
 	t.Logf("PASS: seedPushConflictAgentEnabled returns true")
 
-	// --- Test 2: Queue slot was acquired and released (since agent is configured
-	// but AgentSpawnConfig.IsEnabled() is false, spawnAgentForSeedSync exits early,
-	// and the slot release in executeSeedPushWithMerge handles it).
+	// --- Test 2: Queue slot is retained on conflict (slot retention pattern) ---
 	// Wait briefly for the async onSeedPushConflict goroutine to start.
 	time.Sleep(100 * time.Millisecond)
 
-	// The queue slot should be held (agent is configured, so conflict path
-	// does NOT release the slot in executeSeedPushWithMerge — the agent handler does).
-	// Since the agent spawn exits early (AgentSpawnConfig not enabled),
-	// spawnAgentForSeedSync releases the slot.
-	// Wait for the async goroutine to complete.
-	time.Sleep(200 * time.Millisecond)
+	// The queue slot should be held. Conflict retains the slot so
+	// PR auto-merge is suspended until operator resolves (retry or dismiss).
+	q, qerr := integrityStore.GetPRQueue(ns, proj)
+	if qerr != nil {
+		t.Fatalf("get queue: %v", qerr)
+	}
+	if q.ActivePR != integrity.SeedSyncSentinel {
+		t.Fatalf("expected SeedSyncSentinel retained, got ActivePR=%d", q.ActivePR)
+	}
+	t.Logf("PASS: queue slot retained on conflict (slot retention)")
 
-	// Verify we can enqueue again (slot was released).
-	isActive, err := integrityStore.EnqueuePriority(ns, proj, integrity.SeedSyncSentinel)
-	if err != nil {
-		t.Fatalf("re-enqueue failed: %v", err)
-	}
-	if !isActive {
-		t.Fatal("expected to be active after re-enqueue (slot should have been released)")
-	}
 	// Release for cleanup.
 	integrityStore.ReleasePRSlot(ns, proj, integrity.SeedSyncSentinel)
-	t.Logf("PASS: queue slot properly acquired and released")
 
 	// --- Test 3: Verify seedPushConflictAgentEnabled returns false when not configured ---
 	integrityStore.SetGlobalSeedEventSettings(&integrity.SeedEventSettings{})

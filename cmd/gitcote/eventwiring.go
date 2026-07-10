@@ -205,6 +205,24 @@ func notifyInterrupt(ec *eventContext, method string, p *pr.PullRequest, reason,
 	notify(method, msg.String(), p.RepoNamespace, p.RepoProject, p.Number, ec.logger)
 }
 
+func notifySeedSyncInterrupt(ec *eventContext, method, ns, proj, reason, detail, agentName string) {
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "[GitCote] Seed sync interrupted: %s/%s", ns, proj)
+	fmt.Fprintf(&msg, "\nReason: %s", reason)
+	if detail != "" {
+		fmt.Fprintf(&msg, "\nDetail: %s", detail)
+	}
+	if agentName != "" {
+		fmt.Fprintf(&msg, "\nAgent: %s (merger)", agentName)
+	}
+	fmt.Fprintf(&msg, "\nTime: %s", time.Now().Format(time.RFC3339))
+	if ec.gitcoteURL != "" {
+		fmt.Fprintf(&msg, "\nLink: %s/p/%s/%s",
+			strings.TrimSuffix(ec.gitcoteURL, "/"), ns, proj)
+	}
+	notify(method, msg.String(), ns, proj, 0, ec.logger)
+}
+
 // markInterrupted transitions a PR to interrupted state.
 func markInterrupted(prStore *pr.Store, p *pr.PullRequest, reason, detail, agentName, agentRole string, logger *slog.Logger) {
 	p.PreviousState = p.State
@@ -870,6 +888,8 @@ func onSeedPushConflict(ec *eventContext, ns, proj, tempDir string, conflictFile
 }
 
 // spawnAgentForSeedSync finds the appropriate merger agent and executes it for seed sync conflict resolution.
+// On failure, the queue slot is retained (matching PR interrupt behavior) so PR
+// auto-merge is suspended until the operator retries or dismisses.
 func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventAction, ns, proj, tempDir string, conflictFiles []string) {
 	if !ec.agentCfg.IsEnabled() {
 		return
@@ -879,8 +899,11 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 	configs, err := agent.ScanAgentConfigs(agentsRoot)
 	if err != nil {
 		ec.logger.Error("scan agent configs for seed sync", "error", err)
+		detail := fmt.Sprintf("scan configs: %v", err)
 		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
-		releaseSeedSyncSlot(ec, ns, proj)
+		if action.NotifyEnabled {
+			go notifySeedSyncInterrupt(ec, action.NotifyMethod, ns, proj, "agent_spawn_failed", detail, action.AgentName)
+		}
 		return
 	}
 
@@ -895,9 +918,12 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 		}
 	}
 	if ac == nil {
+		detail := "no agent config found for role: merger"
 		ec.logger.Warn("no agent config found for seed sync merger", "agent_name", action.AgentName)
 		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
-		releaseSeedSyncSlot(ec, ns, proj)
+		if action.NotifyEnabled {
+			go notifySeedSyncInterrupt(ec, action.NotifyMethod, ns, proj, "agent_spawn_failed", detail, action.AgentName)
+		}
 		return
 	}
 
@@ -937,7 +963,9 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 
 		ec.logger.Error("seed sync agent failed", "ns", ns, "proj", proj, "detail", detail)
 		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
-		releaseSeedSyncSlot(ec, ns, proj)
+		if action.NotifyEnabled {
+			go notifySeedSyncInterrupt(ec, action.NotifyMethod, ns, proj, "seed_sync_agent_failed", detail, ac.DirName)
+		}
 	}
 }
 
@@ -1102,12 +1130,20 @@ func updateSeedSyncState(gitStore *git.Store, ns, proj, state string) {
 
 // executeSeedPullFromQueue runs seed pull when the queue slot becomes available.
 // The queue slot is already held (SeedSyncSentinel is active).
+// On failure or conflict, the slot is retained so PR auto-merge stays suspended.
 func executeSeedPullFromQueue(ec *eventContext, ns, proj string) {
 	if ec.seedCtx == nil {
 		ec.logger.Error("seed sync from queue: no seed context")
-		releaseSeedSyncSlot(ec, ns, proj)
+		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
 		return
 	}
+
+	if !acquireSeedLock(&seedPullActive, ns, proj) {
+		ec.logger.Warn("seed pull already in progress, skipping queue-triggered pull", "ns", ns, "proj", proj)
+		return
+	}
+	defer releaseSeedLock(&seedPullActive, ns, proj)
+
 	updateSeedSyncState(ec.gitStore, ns, proj, "syncing")
 	result := doSeedPull(ec.seedCtx, ec, ns, proj, "main")
 	success, _ := result["success"].(bool)
@@ -1117,13 +1153,11 @@ func executeSeedPullFromQueue(ec *eventContext, ns, proj string) {
 		releaseSeedSyncSlot(ec, ns, proj)
 	} else if status == "conflict" {
 		updateSeedSyncState(ec.gitStore, ns, proj, "conflict")
-		if !seedPullConflictAgentEnabled(ec, ns, proj) {
-			releaseSeedSyncSlot(ec, ns, proj)
-		}
+		// Slot retained — agent (if enabled) or operator handles it.
 	} else {
 		ec.logger.Warn("seed sync from queue failed", "ns", ns, "proj", proj, "result", result)
 		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
-		releaseSeedSyncSlot(ec, ns, proj)
+		// Slot retained — operator uses retry_seed_sync or dismiss_seed_sync.
 	}
 }
 

@@ -7,16 +7,37 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sopranoworks/gitcote/internal/git"
 	"github.com/sopranoworks/gitcote/internal/integrity"
 	"github.com/sopranoworks/gitcote/internal/vault"
+	"github.com/sopranoworks/shoka/pkg/auth"
 	"github.com/sopranoworks/shoka/pkg/authz"
 	"github.com/sopranoworks/shoka/pkg/uiws"
 	"github.com/sopranoworks/shoka/pkg/userstore"
 )
+
+// seedPullActive and seedPushActive prevent concurrent seed sync operations
+// for the same project. EnqueuePriority returns isActive=true when the sentinel
+// is already active, which doesn't prevent a second call from proceeding.
+var (
+	seedPullActive sync.Map // ns/proj → true
+	seedPushActive sync.Map // ns/proj → true
+)
+
+func seedSyncKey(ns, proj string) string { return ns + "/" + proj }
+
+func acquireSeedLock(locks *sync.Map, ns, proj string) bool {
+	_, loaded := locks.LoadOrStore(seedSyncKey(ns, proj), true)
+	return !loaded
+}
+
+func releaseSeedLock(locks *sync.Map, ns, proj string) {
+	locks.Delete(seedSyncKey(ns, proj))
+}
 
 // Seed-related WebSocket message types.
 const (
@@ -29,8 +50,10 @@ const (
 	MsgSeedTest      uiws.MessageType = "SEED_TEST"
 	MsgSeedPush      uiws.MessageType = "SEED_PUSH"
 	MsgSeedPull      uiws.MessageType = "SEED_PULL"
-	MsgSeedResume    uiws.MessageType = "SEED_RESUME"
-	MsgSeedStatus    uiws.MessageType = "SEED_STATUS"
+	MsgSeedResume       uiws.MessageType = "SEED_RESUME"
+	MsgSeedStatus       uiws.MessageType = "SEED_STATUS"
+	MsgSeedSyncRetry    uiws.MessageType = "SEED_SYNC_RETRY"
+	MsgSeedSyncDismiss  uiws.MessageType = "SEED_SYNC_DISMISS"
 )
 
 // SeedLevels maps seed message types to their authorization requirements.
@@ -44,8 +67,10 @@ var SeedLevels = map[uiws.MessageType]uiws.Op{
 	MsgSeedTest:      {Level: authz.LevelAdmin, Global: false},
 	MsgSeedPush:      {Level: authz.LevelWrite, Global: false},
 	MsgSeedPull:      {Level: authz.LevelWrite, Global: false},
-	MsgSeedResume:    {Level: authz.LevelAdmin, Global: true},
-	MsgSeedStatus:    {Level: authz.LevelRead, Global: false},
+	MsgSeedResume:      {Level: authz.LevelAdmin, Global: true},
+	MsgSeedStatus:      {Level: authz.LevelRead, Global: false},
+	MsgSeedSyncRetry:   {Level: authz.LevelAdmin, Global: false},
+	MsgSeedSyncDismiss: {Level: authz.LevelAdmin, Global: false},
 }
 
 type seedContext struct {
@@ -88,6 +113,10 @@ func seedDispatch(c *uiws.Client, sc *seedContext, ec *eventContext, msgType uiw
 		handleSeedResume(c, sc, payload)
 	case MsgSeedStatus:
 		handleSeedStatusWS(c, sc.gitStore, payload)
+	case MsgSeedSyncRetry:
+		handleSeedSyncRetryWS(c, sc, ec, payload)
+	case MsgSeedSyncDismiss:
+		handleSeedSyncDismissWS(c, sc, ec, payload)
 	default:
 		return false
 	}
@@ -328,6 +357,15 @@ func executeSeedPull(sc *seedContext, ec *eventContext, namespace, project, bran
 		branch = "main"
 	}
 
+	if !acquireSeedLock(&seedPullActive, namespace, project) {
+		return map[string]interface{}{
+			"success": false,
+			"status":  "in_progress",
+			"message": "seed pull already in progress for this project",
+		}
+	}
+	defer releaseSeedLock(&seedPullActive, namespace, project)
+
 	// Acquire PR queue slot for mutual exclusion with PR processing.
 	queued := false
 	if ec != nil && ec.integrityHS != nil {
@@ -351,18 +389,19 @@ func executeSeedPull(sc *seedContext, ec *eventContext, namespace, project, bran
 
 	result := doSeedPull(sc, ec, namespace, project, branch)
 
-	// Release queue slot on success or non-conflict failure.
+	// Release queue slot on success only. On conflict or failure, retain
+	// the slot so PR auto-merge is suspended until the operator resolves
+	// the seed sync (via retry or dismiss).
 	status, _ := result["status"].(string)
 	success, _ := result["success"].(bool)
 	if ec != nil && ec.integrityHS != nil {
-		if success || (status != "conflict" && status != "queued") {
+		if success {
 			releaseSeedSyncSlot(ec, namespace, project)
+		} else if status != "conflict" && status != "queued" {
+			updateSeedSyncState(ec.gitStore, namespace, project, "interrupted")
 		}
-		// On conflict with agent enabled, spawnAgentForSeedSync handles release.
-		// On conflict without agent, release now.
-		if status == "conflict" && !seedPullConflictAgentEnabled(ec, namespace, project) {
-			releaseSeedSyncSlot(ec, namespace, project)
-		}
+		// On conflict: slot retained. Agent (if enabled) handles it;
+		// otherwise operator uses retry_seed_sync or dismiss_seed_sync.
 	}
 
 	return result
@@ -508,6 +547,62 @@ func handleSeedStatusWS(c *uiws.Client, gitStore *git.Store, payload json.RawMes
 	})
 }
 
+func handleSeedSyncRetryWS(c *uiws.Client, sc *seedContext, ec *eventContext, payload json.RawMessage) {
+	var p seedTargetPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	if ec.integrityHS == nil {
+		c.SendError("integrity store not available")
+		return
+	}
+	q, qerr := ec.integrityHS.GetPRQueue(p.Namespace, p.ProjectName)
+	if qerr != nil || q.ActivePR != integrity.SeedSyncSentinel {
+		c.SendError(fmt.Sprintf("seed sync is not the active queue entry for %s/%s", p.Namespace, p.ProjectName))
+		return
+	}
+
+	ensureNoActiveToken(ec, p.Namespace, p.ProjectName, 0)
+	releaseSeedSyncSlot(ec, p.Namespace, p.ProjectName)
+	updateSeedSyncState(sc.gitStore, p.Namespace, p.ProjectName, "retrying")
+
+	go func() {
+		executeSeedPull(sc, ec, p.Namespace, p.ProjectName, "")
+	}()
+
+	c.SendResponse(MsgSeedSyncRetry, map[string]string{
+		"status":  "ok",
+		"message": "seed sync retried, queue slot released and pull re-triggered",
+	})
+}
+
+func handleSeedSyncDismissWS(c *uiws.Client, sc *seedContext, ec *eventContext, payload json.RawMessage) {
+	var p seedTargetPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		c.SendError("invalid payload")
+		return
+	}
+	if ec.integrityHS == nil {
+		c.SendError("integrity store not available")
+		return
+	}
+	q, qerr := ec.integrityHS.GetPRQueue(p.Namespace, p.ProjectName)
+	if qerr != nil || q.ActivePR != integrity.SeedSyncSentinel {
+		c.SendError(fmt.Sprintf("seed sync is not the active queue entry for %s/%s", p.Namespace, p.ProjectName))
+		return
+	}
+
+	ensureNoActiveToken(ec, p.Namespace, p.ProjectName, 0)
+	updateSeedSyncState(sc.gitStore, p.Namespace, p.ProjectName, "idle")
+	releaseSeedSyncSlot(ec, p.Namespace, p.ProjectName)
+
+	c.SendResponse(MsgSeedSyncDismiss, map[string]string{
+		"status":  "ok",
+		"message": "seed sync dismissed, queue slot released",
+	})
+}
+
 // SeedPushResult holds the outcome of a push attempt with merge support.
 type SeedPushResult struct {
 	Success      bool
@@ -533,6 +628,14 @@ func executeSeedPushWithMerge(sc *seedContext, ec *eventContext, namespace, proj
 		branch = "main"
 	}
 
+	if !acquireSeedLock(&seedPushActive, namespace, projectName) {
+		return SeedPushResult{
+			Status:  "in_progress",
+			Message: "seed push already in progress for this project",
+		}
+	}
+	defer releaseSeedLock(&seedPushActive, namespace, projectName)
+
 	// Acquire PR queue slot for mutual exclusion with PR processing.
 	queued := false
 	if ec != nil && ec.integrityHS != nil {
@@ -555,13 +658,13 @@ func executeSeedPushWithMerge(sc *seedContext, ec *eventContext, namespace, proj
 
 	result := doSeedPush(sc, ec, namespace, projectName, branch)
 
-	// Release queue slot on success or non-conflict failure.
+	// Release queue slot on success only. On conflict or failure, retain
+	// the slot so PR auto-merge is suspended until operator resolves.
 	if ec != nil && ec.integrityHS != nil {
-		if result.Success || (result.Status != "conflict" && result.Status != "queued") {
+		if result.Success {
 			releaseSeedSyncSlot(ec, namespace, projectName)
-		}
-		if result.Status == "conflict" && !seedPushConflictAgentEnabled(ec, namespace, projectName) {
-			releaseSeedSyncSlot(ec, namespace, projectName)
+		} else if result.Status != "conflict" && result.Status != "queued" {
+			updateSeedSyncState(ec.gitStore, namespace, projectName, "interrupted")
 		}
 	}
 
@@ -738,6 +841,63 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 			SyncStatus: status,
 		}, nil
 	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "retry_seed_sync",
+		Description: "Release the queue slot held by a stuck/interrupted seed sync and re-trigger the pull. Admin only.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in retrySeedSyncInput) (*mcp.CallToolResult, retrySeedSyncOutput, error) {
+		principal, hasPrincipal := auth.PrincipalFrom(ctx)
+		if hasPrincipal {
+			if err := authz.Authorize(principal.Scope, in.Namespace, "", authz.LevelAdmin); err != nil {
+				return nil, retrySeedSyncOutput{}, fmt.Errorf("admin access required")
+			}
+		}
+		if ec.integrityHS == nil {
+			return nil, retrySeedSyncOutput{}, fmt.Errorf("integrity store not available")
+		}
+
+		q, qerr := ec.integrityHS.GetPRQueue(in.Namespace, in.ProjectName)
+		if qerr != nil || q.ActivePR != integrity.SeedSyncSentinel {
+			return nil, retrySeedSyncOutput{}, fmt.Errorf("seed sync is not the active queue entry for %s/%s", in.Namespace, in.ProjectName)
+		}
+
+		ensureNoActiveToken(ec, in.Namespace, in.ProjectName, 0)
+		releaseSeedSyncSlot(ec, in.Namespace, in.ProjectName)
+		updateSeedSyncState(gitStore, in.Namespace, in.ProjectName, "retrying")
+
+		sc := &seedContext{gitStore: gitStore, vault: v, gitcoteURL: gitcoteURL}
+		go func() {
+			executeSeedPull(sc, ec, in.Namespace, in.ProjectName, "")
+		}()
+
+		return nil, retrySeedSyncOutput{Message: "seed sync retried, queue slot released and pull re-triggered"}, nil
+	})
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "dismiss_seed_sync",
+		Description: "Clear interrupted/conflict state on a seed sync and release the queue slot without retrying. Admin only.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in dismissSeedSyncInput) (*mcp.CallToolResult, dismissSeedSyncOutput, error) {
+		principal, hasPrincipal := auth.PrincipalFrom(ctx)
+		if hasPrincipal {
+			if err := authz.Authorize(principal.Scope, in.Namespace, "", authz.LevelAdmin); err != nil {
+				return nil, dismissSeedSyncOutput{}, fmt.Errorf("admin access required")
+			}
+		}
+		if ec.integrityHS == nil {
+			return nil, dismissSeedSyncOutput{}, fmt.Errorf("integrity store not available")
+		}
+
+		q, qerr := ec.integrityHS.GetPRQueue(in.Namespace, in.ProjectName)
+		if qerr != nil || q.ActivePR != integrity.SeedSyncSentinel {
+			return nil, dismissSeedSyncOutput{}, fmt.Errorf("seed sync is not the active queue entry for %s/%s", in.Namespace, in.ProjectName)
+		}
+
+		ensureNoActiveToken(ec, in.Namespace, in.ProjectName, 0)
+		updateSeedSyncState(gitStore, in.Namespace, in.ProjectName, "idle")
+		releaseSeedSyncSlot(ec, in.Namespace, in.ProjectName)
+
+		return nil, dismissSeedSyncOutput{Message: "seed sync dismissed, queue slot released"}, nil
+	})
 }
 
 type pushToSeedInput struct {
@@ -788,6 +948,24 @@ type getSeedStatusOutput struct {
 	PushMode   string              `json:"push_mode"`
 	VaultState string              `json:"vault_state"`
 	SyncStatus *git.SeedSyncStatus `json:"sync_status,omitempty"`
+}
+
+type retrySeedSyncInput struct {
+	Namespace   string `json:"namespace" jsonschema:"required,the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+}
+
+type retrySeedSyncOutput struct {
+	Message string `json:"message"`
+}
+
+type dismissSeedSyncInput struct {
+	Namespace   string `json:"namespace" jsonschema:"required,the namespace"`
+	ProjectName string `json:"project_name" jsonschema:"required,the project name"`
+}
+
+type dismissSeedSyncOutput struct {
+	Message string `json:"message"`
 }
 
 // startSeedScheduler starts a background goroutine that periodically pushes

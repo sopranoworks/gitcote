@@ -41,6 +41,8 @@ var toolPermissions = map[string]authz.Level{
 	"pull_from_seed":       authz.LevelAdmin,
 	"retry_pr_agent":       authz.LevelAdmin,
 	"dismiss_pr_interrupt": authz.LevelAdmin,
+	"retry_seed_sync":      authz.LevelAdmin,
+	"dismiss_seed_sync":    authz.LevelAdmin,
 
 	// Internal — never advertised
 	"issue_git_token": levelInternal,

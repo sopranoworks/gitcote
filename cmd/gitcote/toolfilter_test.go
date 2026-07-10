@@ -193,7 +193,7 @@ func TestToolFilter_PlainMCPReadOnly(t *testing.T) {
 		}
 	}
 
-	adminTools := []string{"list_projects", "push_to_seed", "pull_from_seed", "retry_pr_agent", "dismiss_pr_interrupt"}
+	adminTools := []string{"list_projects", "push_to_seed", "pull_from_seed", "retry_pr_agent", "dismiss_pr_interrupt", "retry_seed_sync", "dismiss_seed_sync"}
 	for _, name := range adminTools {
 		if hasToolName(tools, name) {
 			t.Errorf("admin tool %q should NOT be visible to plain MCP", name)
