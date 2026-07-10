@@ -100,6 +100,7 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 
 	if !createPR {
 		invalidateApprovalsForPush(store, logger, namespace, project)
+		reconcileExternalMerges(store, ec, namespace, project, logger)
 		return
 	}
 
@@ -263,6 +264,72 @@ func invalidateApprovalsForPush(store *git.Store, logger *slog.Logger, namespace
 			p.UpdatedAt = time.Now()
 			_ = prStore.Update(p)
 		}
+	}
+}
+
+// reconcileExternalMerges detects PRs whose source branch has been merged into
+// the target branch outside of GitCote's merge flow (e.g. operator pushed
+// manually). Transitions such PRs to StateMerged and releases their queue slot.
+func reconcileExternalMerges(store *git.Store, ec *eventContext, namespace, project string, logger *slog.Logger) {
+	if ec == nil || ec.integrityHS == nil {
+		return
+	}
+	prStore, err := getPRStore(store.BaseDir(), namespace, project)
+	if err != nil {
+		return
+	}
+	repo, err := store.OpenRepo(namespace, project)
+	if err != nil {
+		return
+	}
+
+	prs, _ := prStore.List("")
+	for i := range prs {
+		p := &prs[i]
+		if p.State != pr.StateInterrupted && p.State != pr.StateMergeConflict {
+			continue
+		}
+
+		sourceHash, serr := git.ResolveBranch(repo, p.SourceBranch)
+		targetHash, terr := git.ResolveBranch(repo, p.TargetBranch)
+		if serr != nil || terr != nil {
+			continue
+		}
+
+		sourceCommit, err := repo.CommitObject(sourceHash)
+		if err != nil {
+			continue
+		}
+		targetCommit, err := repo.CommitObject(targetHash)
+		if err != nil {
+			continue
+		}
+
+		isAncestor, _ := sourceCommit.IsAncestor(targetCommit)
+		if !isAncestor {
+			continue
+		}
+
+		now := time.Now()
+		p.State = pr.StateMerged
+		p.MergeCommit = targetHash.String()
+		p.MergedAt = &now
+		p.PreviousState = ""
+		p.InterruptInfo = nil
+		p.UpdatedAt = now
+		if err := prStore.Update(p); err != nil {
+			continue
+		}
+
+		logger.Info("PR merged externally (source ancestor of target)",
+			"pr", p.Number, "source", p.SourceBranch, "target", p.TargetBranch)
+
+		if delErr := git.DeleteBranchRef(repo, p.SourceBranch); delErr == nil {
+			p.SourceBranchDeleted = true
+			_ = prStore.Update(p)
+		}
+
+		releasePRSlotAndDequeue(ec, namespace, project, int(p.Number))
 	}
 }
 
@@ -479,6 +546,11 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if err != nil {
 			return nil, approvePROutput{}, err
 		}
+		if p.State == pr.StateInterrupted && p.PreviousState == pr.StateOpen {
+			p.State = pr.StateOpen
+			p.PreviousState = ""
+			p.InterruptInfo = nil
+		}
 		if p.State != pr.StateOpen {
 			return nil, approvePROutput{}, fmt.Errorf("PR #%d is in state %q, not open", in.Number, p.State)
 		}
@@ -584,6 +656,11 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		p, err := prStore.Get(in.Number)
 		if err != nil {
 			return nil, rejectPROutput{}, err
+		}
+		if p.State == pr.StateInterrupted && p.PreviousState == pr.StateOpen {
+			p.State = pr.StateOpen
+			p.PreviousState = ""
+			p.InterruptInfo = nil
 		}
 		if p.State != pr.StateOpen {
 			return nil, rejectPROutput{}, fmt.Errorf("PR #%d is in state %q, not open", in.Number, p.State)
@@ -1070,6 +1147,16 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 		c.SendError(err.Error())
 		return
 	}
+	if pullReq.State == pr.StateInterrupted {
+		prev := pullReq.PreviousState
+		if prev != pr.StateMergeConflict && prev != pr.StateApproved {
+			c.SendError(fmt.Sprintf("PR #%d is interrupted from %q, cannot merge", p.Number, prev))
+			return
+		}
+		pullReq.State = prev
+		pullReq.PreviousState = ""
+		pullReq.InterruptInfo = nil
+	}
 	if pullReq.State != pr.StateApproved && pullReq.State != pr.StateMergeConflict {
 		c.SendError(fmt.Sprintf("PR #%d is in state %q, not approved or merge_conflict", p.Number, pullReq.State))
 		return
@@ -1373,8 +1460,13 @@ func operatorRejectPR(gitStore *git.Store, ec *eventContext, ns, proj string, pr
 	if err != nil {
 		return nil, err
 	}
-	if pullReq.State != pr.StateOpen && pullReq.State != pr.StateApproved {
-		return nil, fmt.Errorf("PR #%d is in state %q (can only reject open or approved PRs)", prNumber, pullReq.State)
+	if pullReq.State == pr.StateInterrupted {
+		pullReq.State = pullReq.PreviousState
+		pullReq.PreviousState = ""
+		pullReq.InterruptInfo = nil
+	}
+	if pullReq.State != pr.StateOpen && pullReq.State != pr.StateApproved && pullReq.State != pr.StateMergeConflict {
+		return nil, fmt.Errorf("PR #%d is in state %q (can only reject open, approved, merge_conflict, or interrupted PRs)", prNumber, pullReq.State)
 	}
 
 	pullReq.State = pr.StateRejected

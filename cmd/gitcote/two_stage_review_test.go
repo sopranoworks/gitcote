@@ -997,6 +997,379 @@ func TestReviewIncomplete_RepeatedInterrupt(t *testing.T) {
 	t.Log("PASS: 3 cycles with queue slot retained, PR #2 never jumped ahead")
 }
 
+func TestManualRecovery_ApproveInterruptedReview(t *testing.T) {
+	ns, proj := "default", "manualapprove"
+	_, hs, prStore, ec := setup2StageTest(t, ns, proj)
+
+	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-review")
+	hs.EnqueuePR(ns, proj, 1)
+
+	create2StagePR(t, prStore, ns, proj, 2, "feat-queued")
+	hs.EnqueuePR(ns, proj, 2)
+
+	markInterrupted(prStore, pr1, "review_incomplete",
+		"agent exited successfully but did not approve or reject",
+		"default_claude_reviewer", "reviewer", ec.logger)
+
+	p, _ := prStore.Get(1)
+	if p.State != pr.StateInterrupted {
+		t.Fatalf("setup: state = %q, want interrupted", p.State)
+	}
+
+	mcpServer := mcp.NewServer(
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"}, nil)
+	registerPRTools(mcpServer, ec.gitStore, &seedContext{gitStore: ec.gitStore}, ec)
+
+	authenticator := auth.New(auth.Config{
+		ValidateToken: func(tok string) (auth.Principal, auth.RejectReason, bool) {
+			return auth.Principal{Name: "operator", Email: "op@test.com", Scope: "*"}, "", true
+		},
+	})
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return mcpServer }, nil)
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", authenticator.Middleware(mcpHandler))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{Name: "test-client", Version: "1.0"}, nil)
+	ctx := context.Background()
+	session, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:             ts.URL + "/mcp",
+		HTTPClient:           &http.Client{Transport: &bearerTransport{token: "t"}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "approve_pull_request",
+		Arguments: map[string]any{
+			"namespace":    ns,
+			"project_name": proj,
+			"number":       float64(1),
+		},
+	})
+	if err != nil {
+		t.Fatalf("approve interrupted PR: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("approve interrupted PR returned error: %s", extractText(result))
+	}
+
+	approved, _ := prStore.Get(1)
+	if approved.State != pr.StateApproved {
+		t.Fatalf("after approve: state = %q, want approved", approved.State)
+	}
+	if approved.InterruptInfo != nil {
+		t.Fatal("after approve: interrupt_info should be nil")
+	}
+	if approved.PreviousState != "" {
+		t.Fatalf("after approve: previous_state = %q, want empty", approved.PreviousState)
+	}
+	t.Log("PASS: operator can approve an interrupted-from-open PR directly")
+}
+
+func TestManualRecovery_RejectInterruptedReview(t *testing.T) {
+	ns, proj := "default", "manualreject"
+	_, hs, prStore, ec := setup2StageTest(t, ns, proj)
+
+	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-reject")
+	hs.EnqueuePR(ns, proj, 1)
+
+	create2StagePR(t, prStore, ns, proj, 2, "feat-queued")
+	hs.EnqueuePR(ns, proj, 2)
+
+	markInterrupted(prStore, pr1, "review_incomplete",
+		"agent exited successfully but did not approve or reject",
+		"default_claude_reviewer", "reviewer", ec.logger)
+
+	mcpServer := mcp.NewServer(
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"}, nil)
+	registerPRTools(mcpServer, ec.gitStore, &seedContext{gitStore: ec.gitStore}, ec)
+
+	authenticator := auth.New(auth.Config{
+		ValidateToken: func(tok string) (auth.Principal, auth.RejectReason, bool) {
+			return auth.Principal{Name: "operator", Email: "op@test.com", Scope: "*"}, "", true
+		},
+	})
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return mcpServer }, nil)
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", authenticator.Middleware(mcpHandler))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{Name: "test-client", Version: "1.0"}, nil)
+	ctx := context.Background()
+	session, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:             ts.URL + "/mcp",
+		HTTPClient:           &http.Client{Transport: &bearerTransport{token: "t"}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "reject_pull_request",
+		Arguments: map[string]any{
+			"namespace":    ns,
+			"project_name": proj,
+			"number":       float64(1),
+			"reason":       "reviewed manually, not acceptable",
+		},
+	})
+	if err != nil {
+		t.Fatalf("reject interrupted PR: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("reject interrupted PR returned error: %s", extractText(result))
+	}
+
+	rejected, _ := prStore.Get(1)
+	if rejected.State != pr.StateRejected {
+		t.Fatalf("after reject: state = %q, want rejected", rejected.State)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 2 {
+		t.Errorf("after reject: active = %d, want 2 (slot released)", q.ActivePR)
+	}
+	t.Log("PASS: operator can reject an interrupted-from-open PR directly, slot released")
+}
+
+func TestManualRecovery_ApproveBlockedFromMergeConflict(t *testing.T) {
+	ns, proj := "default", "approvemcblock"
+	_, _, prStore, ec := setup2StageTest(t, ns, proj)
+
+	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-conflict")
+	pr1.State = pr.StateMergeConflict
+	pr1.Mergeable = pr.MergeableConflict
+	pr1.UpdatedAt = time.Now()
+	prStore.Update(pr1)
+
+	markInterrupted(prStore, pr1, "merge_still_conflicting",
+		"merger agent succeeded but conflicts persist",
+		"test-merger", "merger", ec.logger)
+
+	mcpServer := mcp.NewServer(
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"}, nil)
+	registerPRTools(mcpServer, ec.gitStore, &seedContext{gitStore: ec.gitStore}, ec)
+
+	authenticator := auth.New(auth.Config{
+		ValidateToken: func(tok string) (auth.Principal, auth.RejectReason, bool) {
+			return auth.Principal{Name: "op", Email: "op@t.com", Scope: "*"}, "", true
+		},
+	})
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return mcpServer }, nil)
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", authenticator.Middleware(mcpHandler))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{Name: "test-client", Version: "1.0"}, nil)
+	ctx := context.Background()
+	session, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:             ts.URL + "/mcp",
+		HTTPClient:           &http.Client{Transport: &bearerTransport{token: "t"}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "approve_pull_request",
+		Arguments: map[string]any{
+			"namespace":    ns,
+			"project_name": proj,
+			"number":       float64(1),
+		},
+	})
+	if err != nil {
+		t.Fatalf("approve call: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error: approve should fail on interrupted-from-merge_conflict")
+	}
+	text := extractText(result)
+	if !strings.Contains(text, "not open") {
+		t.Fatalf("unexpected error text: %s", text)
+	}
+	t.Log("PASS: approve correctly blocked on interrupted-from-merge_conflict PR")
+}
+
+func TestManualRecovery_OperatorRejectInterrupted(t *testing.T) {
+	ns, proj := "default", "oprejectint"
+	gitStore, hs, prStore, ec := setup2StageTest(t, ns, proj)
+
+	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-oprj")
+	hs.EnqueuePR(ns, proj, 1)
+
+	pr1.State = pr.StateMergeConflict
+	pr1.UpdatedAt = time.Now()
+	prStore.Update(pr1)
+
+	markInterrupted(prStore, pr1, "merge_still_conflicting",
+		"merger agent succeeded but conflicts persist",
+		"test-merger", "merger", ec.logger)
+
+	create2StagePR(t, prStore, ns, proj, 2, "feat-queued")
+	hs.EnqueuePR(ns, proj, 2)
+
+	_, err := operatorRejectPR(gitStore, ec, ns, proj, 1, "not worth resolving")
+	if err != nil {
+		t.Fatalf("operator reject interrupted: %v", err)
+	}
+
+	rejected, _ := prStore.Get(1)
+	if rejected.State != pr.StateRejected {
+		t.Fatalf("after operator reject: state = %q, want rejected", rejected.State)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 2 {
+		t.Errorf("after operator reject: active = %d, want 2", q.ActivePR)
+	}
+	t.Log("PASS: operator can reject interrupted PR (from merge_conflict), slot released")
+}
+
+func TestManualRecovery_ExternalMergeDetected(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+
+	baseDir := t.TempDir()
+	gitStore := git.NewStore(baseDir)
+	ns, proj := "e2e", "extmerge"
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	if err := gitStore.CreateRepo(ns, proj); err != nil {
+		t.Fatal(err)
+	}
+
+	integrityStore, err := integrity.Open(filepath.Join(baseDir, "repo_heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer integrityStore.Close()
+	headStore = integrityStore
+
+	oauthSt, err := oauthstore.Open(filepath.Join(baseDir, "oauth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oauthSt.Close()
+
+	ec := &eventContext{
+		gitStore:    gitStore,
+		integrityHS: integrityStore,
+		oauthStore:  oauthSt,
+		agentCfg:    AgentSpawnConfig{},
+		logger:      logger,
+	}
+
+	gitHTTP := git.NewHandler(gitStore, logger)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, ec)
+	}
+
+	authenticator := auth.New(auth.Config{
+		ValidateToken: func(tok string) (auth.Principal, auth.RejectReason, bool) {
+			return auth.Principal{Name: "admin", Email: "admin@test.com", Scope: "*"}, "", true
+		},
+	})
+	httpMux := http.NewServeMux()
+	httpMux.Handle("/", authenticator.Middleware(gitHTTP))
+	ts := httptest.NewServer(httpMux)
+	defer ts.Close()
+
+	// Initial commit on main
+	cloneDir := t.TempDir()
+	runGit2Stage(t, cloneDir, "clone", ts.URL+"/"+ns+"/"+proj+".git", "repo")
+	repoDir := filepath.Join(cloneDir, "repo")
+	writeTestFile(t, repoDir, "README.md", "# External Merge Test\n")
+	runGit2Stage(t, repoDir, "add", "README.md")
+	runGit2Stage(t, repoDir, "commit", "-m", "initial commit")
+	runGit2Stage(t, repoDir, "push", "-u", "origin", "HEAD:refs/heads/main")
+
+	// Create feature branch with a change
+	runGit2Stage(t, repoDir, "checkout", "-b", "feat/external")
+	writeTestFile(t, repoDir, "feature.go", "package main\nfunc Feature() {}\n")
+	runGit2Stage(t, repoDir, "add", "feature.go")
+	runGit2Stage(t, repoDir, "commit", "-m", "add feature")
+	runGit2Stage(t, repoDir, "push", "-u", "origin", "feat/external")
+
+	// Create a PR in interrupted state (simulating a stalled merger)
+	prStore, err := getPRStore(baseDir, ns, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	thePR := &pr.PullRequest{
+		RepoNamespace: ns,
+		RepoProject:   proj,
+		Title:         "External merge test",
+		SourceBranch:  "feat/external",
+		TargetBranch:  "main",
+		Author:        "test",
+		State:         pr.StateMergeConflict,
+		Mergeable:     pr.MergeableConflict,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		OrderFiles:    []string{},
+		ResultFiles:   []string{},
+	}
+	prNum, err := prStore.Create(thePR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	integrityStore.EnqueuePR(ns, proj, int(prNum))
+
+	markInterrupted(prStore, thePR, "merge_still_conflicting",
+		"merger agent succeeded but conflicts persist",
+		"test-merger", "merger", logger)
+
+	q, _ := integrityStore.GetPRQueue(ns, proj)
+	if q.ActivePR != int(prNum) {
+		t.Fatalf("setup: active = %d, want %d", q.ActivePR, prNum)
+	}
+
+	// Operator manually merges feat/external into main and pushes
+	runGit2Stage(t, repoDir, "checkout", "main")
+	runGit2Stage(t, repoDir, "merge", "feat/external", "-m", "manual merge")
+	runGit2Stage(t, repoDir, "push", "origin", "main")
+
+	// The push fires handlePostReceive → reconcileExternalMerges
+	// Check that the PR was auto-transitioned to merged
+	merged, _ := prStore.Get(prNum)
+	if merged.State != pr.StateMerged {
+		t.Fatalf("after external push: state = %q, want merged", merged.State)
+	}
+	if merged.InterruptInfo != nil {
+		t.Fatal("after external merge: interrupt_info should be nil")
+	}
+	if merged.MergeCommit == "" {
+		t.Fatal("after external merge: merge_commit should be set")
+	}
+
+	// Queue slot should be released
+	time.Sleep(50 * time.Millisecond)
+	q, _ = integrityStore.GetPRQueue(ns, proj)
+	if q.ActivePR != 0 {
+		t.Errorf("after external merge: active = %d, want 0 (idle)", q.ActivePR)
+	}
+	t.Log("PASS: external merge detected on push, PR transitioned to merged, slot released")
+}
+
 func runGit2Stage(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
