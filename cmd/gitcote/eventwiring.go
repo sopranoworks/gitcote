@@ -1120,12 +1120,82 @@ func cleanupTempCloneDir(ec *eventContext, tempDir string) {
 	}
 }
 
+// reconcileExternalSeedSync detects when an operator manually resolved a
+// seed-pull conflict and pushed the result to main outside GitCote's agent
+// flow. If refs/remotes/seed/main is an ancestor of local main, the conflict
+// is resolved — auto-clear the interrupted/conflict state and release the
+// queue slot. Mirrors reconcileExternalMerges for PRs.
+func reconcileExternalSeedSync(store *git.Store, ec *eventContext, ns, proj string, logger *slog.Logger) {
+	if ec == nil || ec.integrityHS == nil {
+		return
+	}
+
+	q, err := ec.integrityHS.GetPRQueue(ns, proj)
+	if err != nil || q.ActivePR != integrity.SeedSyncSentinel {
+		return
+	}
+
+	projPath, err := store.ProjectPath(ns, proj)
+	if err != nil {
+		return
+	}
+	cfg, err := git.LoadSeedConfig(projPath)
+	if err != nil || cfg.SyncStatus == nil {
+		return
+	}
+	if cfg.SyncStatus.State != "interrupted" && cfg.SyncStatus.State != "conflict" {
+		return
+	}
+
+	repo, err := store.OpenRepo(ns, proj)
+	if err != nil {
+		return
+	}
+
+	seedRef, err := repo.Reference(plumbing.ReferenceName("refs/remotes/seed/main"), true)
+	if err != nil {
+		return
+	}
+	mainHash, err := git.ResolveBranch(repo, "main")
+	if err != nil {
+		return
+	}
+
+	seedCommit, err := repo.CommitObject(seedRef.Hash())
+	if err != nil {
+		return
+	}
+	mainCommit, err := repo.CommitObject(mainHash)
+	if err != nil {
+		return
+	}
+
+	isSeedAncestor, _ := seedCommit.IsAncestor(mainCommit)
+	if !isSeedAncestor {
+		return
+	}
+
+	updateSeedSyncState(store, ns, proj, "idle")
+	releaseSeedSyncSlot(ec, ns, proj)
+	logger.Info("seed sync resolved externally (seed ancestor of main)",
+		"namespace", ns, "project", proj)
+}
+
 func updateSeedSyncState(gitStore *git.Store, ns, proj, state string) {
 	projPath, err := gitStore.ProjectPath(ns, proj)
 	if err != nil {
 		return
 	}
-	_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{State: state})
+	cfg, err := git.LoadSeedConfig(projPath)
+	if err != nil {
+		_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{State: state})
+		return
+	}
+	if cfg.SyncStatus == nil {
+		cfg.SyncStatus = &git.SeedSyncStatus{}
+	}
+	cfg.SyncStatus.State = state
+	_ = git.SaveSeedConfig(projPath, cfg)
 }
 
 // executeSeedPullFromQueue runs seed pull when the queue slot becomes available.

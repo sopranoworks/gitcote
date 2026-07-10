@@ -397,11 +397,11 @@ func executeSeedPull(sc *seedContext, ec *eventContext, namespace, project, bran
 	if ec != nil && ec.integrityHS != nil {
 		if success {
 			releaseSeedSyncSlot(ec, namespace, project)
-		} else if status != "conflict" && status != "queued" {
+		} else if status == "conflict" {
+			updateSeedSyncState(ec.gitStore, namespace, project, "conflict")
+		} else if status != "queued" {
 			updateSeedSyncState(ec.gitStore, namespace, project, "interrupted")
 		}
-		// On conflict: slot retained. Agent (if enabled) handles it;
-		// otherwise operator uses retry_seed_sync or dismiss_seed_sync.
 	}
 
 	return result
@@ -658,12 +658,12 @@ func executeSeedPushWithMerge(sc *seedContext, ec *eventContext, namespace, proj
 
 	result := doSeedPush(sc, ec, namespace, projectName, branch)
 
-	// Release queue slot on success only. On conflict or failure, retain
-	// the slot so PR auto-merge is suspended until operator resolves.
 	if ec != nil && ec.integrityHS != nil {
 		if result.Success {
 			releaseSeedSyncSlot(ec, namespace, projectName)
-		} else if result.Status != "conflict" && result.Status != "queued" {
+		} else if result.Status == "conflict" {
+			updateSeedSyncState(ec.gitStore, namespace, projectName, "conflict")
+		} else if result.Status != "queued" {
 			updateSeedSyncState(ec.gitStore, namespace, projectName, "interrupted")
 		}
 	}

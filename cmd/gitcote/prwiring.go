@@ -101,6 +101,7 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 	if !createPR {
 		invalidateApprovalsForPush(store, logger, namespace, project)
 		reconcileExternalMerges(store, ec, namespace, project, logger)
+		reconcileExternalSeedSync(store, ec, namespace, project, logger)
 		return
 	}
 
