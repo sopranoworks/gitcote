@@ -51,7 +51,7 @@ func TestEmptyRepoPRLifecycle(t *testing.T) {
 		plumbing.HEAD, plumbing.NewBranchReferenceName(defaultBranch)))
 
 	// Open PR store.
-	prStore, err := pr.Open(filepath.Join(projDir, "prs.db"))
+	prStore, err := pr.Open(filepath.Join(baseDir, ns, proj+".prs.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestEmptyRepoPRMergeableAllStates(t *testing.T) {
 	repo.Storer.SetReference(plumbing.NewSymbolicReference(
 		plumbing.HEAD, plumbing.NewBranchReferenceName(defaultBranch)))
 
-	prStore, err := pr.Open(filepath.Join(projDir, "prs.db"))
+	prStore, err := pr.Open(filepath.Join(baseDir, ns, proj+".prs.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestEmptyRepoConcurrentPRsNoConflict(t *testing.T) {
 	projDir := filepath.Join(baseDir, ns, proj)
 	defaultBranch, _ := git.ResolveDefaultBranch(repo)
 
-	prStore, err := pr.Open(filepath.Join(projDir, "prs.db"))
+	prStore, err := pr.Open(filepath.Join(baseDir, ns, proj+".prs.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestEmptyRepoConcurrentPRsWithConflict(t *testing.T) {
 	projDir := filepath.Join(baseDir, ns, proj)
 	defaultBranch, _ := git.ResolveDefaultBranch(repo)
 
-	prStore, err := pr.Open(filepath.Join(projDir, "prs.db"))
+	prStore, err := pr.Open(filepath.Join(baseDir, ns, proj+".prs.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

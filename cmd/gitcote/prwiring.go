@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -35,8 +36,16 @@ func getPRStore(baseDir, namespace, project string) (*pr.Store, error) {
 	if s, ok := prStores[key]; ok {
 		return s, nil
 	}
-	projPath := filepath.Join(baseDir, namespace, project)
-	s, err := pr.Open(filepath.Join(projPath, "prs.db"))
+	newPath := filepath.Join(baseDir, namespace, project+".prs.db")
+	oldPath := filepath.Join(baseDir, namespace, project, "prs.db")
+	if _, err := os.Stat(newPath); os.IsNotExist(err) {
+		if _, err := os.Stat(oldPath); err == nil {
+			if err := os.Rename(oldPath, newPath); err != nil {
+				return nil, fmt.Errorf("migrate prs.db: %w", err)
+			}
+		}
+	}
+	s, err := pr.Open(newPath)
 	if err != nil {
 		return nil, err
 	}
