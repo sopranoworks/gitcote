@@ -89,4 +89,73 @@ test.describe('Agent Settings', () => {
     await expect(page.getByRole('button', { name: 'Agent settings' })).toBeVisible()
     await page.screenshot({ path: 'test-results/agent-settings-project-top.png', fullPage: false })
   })
+
+  test('Save disabled when no changes, enabled after edit', async ({ page }) => {
+    await page.goto('/settings?item=agent-settings')
+    await expect(page.getByText('PR Events (Global Defaults)')).toBeVisible({ timeout: 10000 })
+
+    const prSave = page.getByTestId('pr-events-save')
+    const seedSave = page.getByTestId('seed-events-save')
+    await expect(prSave).toBeDisabled()
+    await expect(seedSave).toBeDisabled()
+
+    const prForm = page.getByTestId('pr-events-form')
+    const checkbox = prForm.locator('input[type="checkbox"]').first()
+    await checkbox.click()
+
+    await expect(prSave).toBeEnabled()
+    await expect(seedSave).toBeDisabled()
+
+    await prSave.click()
+    await expect(prSave).toBeDisabled({ timeout: 5000 })
+  })
+
+  test('cross-form isolation: saving Seed Events preserves PR Events edits', async ({ page }) => {
+    await page.goto('/settings?item=agent-settings')
+    await expect(page.getByText('PR Events (Global Defaults)')).toBeVisible({ timeout: 10000 })
+
+    const prForm = page.getByTestId('pr-events-form')
+    const seedForm = page.getByTestId('seed-events-form')
+    const prCheckbox = prForm.locator('input[type="checkbox"]').first()
+    const seedCheckbox = seedForm.locator('input[type="checkbox"]').first()
+
+    const prCheckedBefore = await prCheckbox.isChecked()
+    await prCheckbox.click()
+    const prCheckedAfter = await prCheckbox.isChecked()
+    expect(prCheckedAfter).toBe(!prCheckedBefore)
+
+    await seedCheckbox.click()
+    await page.getByTestId('seed-events-save').click()
+    await expect(page.getByTestId('seed-events-save')).toBeDisabled({ timeout: 5000 })
+
+    const prCheckedStill = await prCheckbox.isChecked()
+    expect(prCheckedStill).toBe(prCheckedAfter)
+    await expect(page.getByTestId('pr-events-save')).toBeEnabled()
+  })
+
+  test('Cancel reverts only its own form', async ({ page }) => {
+    await page.goto('/settings?item=agent-settings')
+    await expect(page.getByText('PR Events (Global Defaults)')).toBeVisible({ timeout: 10000 })
+
+    const prForm = page.getByTestId('pr-events-form')
+    const seedForm = page.getByTestId('seed-events-form')
+    const prCheckbox = prForm.locator('input[type="checkbox"]').first()
+    const seedCheckbox = seedForm.locator('input[type="checkbox"]').first()
+
+    const prOriginal = await prCheckbox.isChecked()
+    const seedOriginal = await seedCheckbox.isChecked()
+
+    await prCheckbox.click()
+    await seedCheckbox.click()
+
+    await expect(page.getByTestId('pr-events-cancel')).toBeVisible()
+    await expect(page.getByTestId('seed-events-cancel')).toBeVisible()
+
+    await page.getByTestId('pr-events-cancel').click()
+    expect(await prCheckbox.isChecked()).toBe(prOriginal)
+    expect(await seedCheckbox.isChecked()).toBe(!seedOriginal)
+
+    await page.getByTestId('seed-events-cancel').click()
+    expect(await seedCheckbox.isChecked()).toBe(seedOriginal)
+  })
 })

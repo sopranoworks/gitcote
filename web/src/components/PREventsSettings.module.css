@@ -64,6 +64,22 @@
   cursor: not-allowed;
 }
 
+.cancelBtn {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--c-border, #444);
+  background: var(--c-bg-raised, #2a2a2a);
+  color: var(--c-text-dim, #a4abb8);
+  font-size: 0.82rem;
+  cursor: pointer;
+  margin-left: 8px;
+  margin-top: 0.5rem;
+}
+
+.cancelBtn:hover {
+  background: var(--c-bg-hover, #333);
+}
+
 .resetBtn {
   padding: 6px 16px;
   border-radius: 4px;

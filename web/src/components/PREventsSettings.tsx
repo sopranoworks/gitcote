@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   prEventSettingsGet,
@@ -166,15 +166,17 @@ export function PREventsForm({
   isProject?: boolean
 }) {
   const [draft, setDraft] = useState<PREventSettings>(settings)
+  const [baseline, setBaseline] = useState<PREventSettings>(settings)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
-  useEffect(() => { setDraft(settings) }, [settings])
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(baseline)
 
   async function handleSave() {
     setSaving(true)
     try {
       await onSave(draft)
+      setBaseline(draft)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {
@@ -184,8 +186,12 @@ export function PREventsForm({
     }
   }
 
+  function handleCancel() {
+    setDraft(baseline)
+  }
+
   return (
-    <>
+    <div data-testid="pr-events-form">
       <EventActionForm
         title="On PR Created"
         role="reviewer"
@@ -213,9 +219,19 @@ export function PREventsForm({
         inherited={inherited?.on_merge_conflict}
       />
       <div>
-        <button className={styles.saveBtn} disabled={saving} onClick={() => void handleSave()}>
+        <button
+          className={styles.saveBtn}
+          disabled={saving || !isDirty}
+          onClick={() => void handleSave()}
+          data-testid="pr-events-save"
+        >
           {saving ? 'Saving…' : 'Save'}
         </button>
+        {isDirty && (
+          <button className={styles.cancelBtn} onClick={handleCancel} data-testid="pr-events-cancel">
+            Cancel
+          </button>
+        )}
         {isProject && onReset && (
           <button className={styles.resetBtn} onClick={() => void onReset()}>
             Reset to defaults
@@ -223,7 +239,7 @@ export function PREventsForm({
         )}
         {saved && <span className={styles.saved}>Saved</span>}
       </div>
-    </>
+    </div>
   )
 }
 
@@ -241,15 +257,17 @@ export function SeedEventsForm({
   isProject?: boolean
 }) {
   const [draft, setDraft] = useState<SeedEventSettings>(settings)
+  const [baseline, setBaseline] = useState<SeedEventSettings>(settings)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
-  useEffect(() => { setDraft(settings) }, [settings])
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(baseline)
 
   async function handleSave() {
     setSaving(true)
     try {
       await onSave(draft)
+      setBaseline(draft)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {
@@ -259,8 +277,12 @@ export function SeedEventsForm({
     }
   }
 
+  function handleCancel() {
+    setDraft(baseline)
+  }
+
   return (
-    <>
+    <div data-testid="seed-events-form">
       <EventActionForm
         title="On Push Conflict"
         role="merger"
@@ -276,9 +298,19 @@ export function SeedEventsForm({
         inherited={inherited?.on_pull_conflict}
       />
       <div>
-        <button className={styles.saveBtn} disabled={saving} onClick={() => void handleSave()}>
+        <button
+          className={styles.saveBtn}
+          disabled={saving || !isDirty}
+          onClick={() => void handleSave()}
+          data-testid="seed-events-save"
+        >
           {saving ? 'Saving…' : 'Save'}
         </button>
+        {isDirty && (
+          <button className={styles.cancelBtn} onClick={handleCancel} data-testid="seed-events-cancel">
+            Cancel
+          </button>
+        )}
         {isProject && onReset && (
           <button className={styles.resetBtn} onClick={() => void onReset()}>
             Reset to defaults
@@ -286,7 +318,7 @@ export function SeedEventsForm({
         )}
         {saved && <span className={styles.saved}>Saved</span>}
       </div>
-    </>
+    </div>
   )
 }
 
@@ -307,22 +339,26 @@ export function PREventsSettingsGlobal() {
   return (
     <div className={styles.container}>
       <div className={styles.sectionHeader}>PR Events (Global Defaults)</div>
-      <PREventsForm
-        settings={data?.global ?? {}}
-        onSave={async (s) => {
-          await prEventSettingsSetGlobal(s)
-          void queryClient.invalidateQueries({ queryKey: ['pr-event-settings-global'] })
-        }}
-      />
+      {data && (
+        <PREventsForm
+          settings={data.global ?? {}}
+          onSave={async (s) => {
+            await prEventSettingsSetGlobal(s)
+            void queryClient.invalidateQueries({ queryKey: ['pr-event-settings-global'] })
+          }}
+        />
+      )}
 
       <div className={styles.sectionHeader} style={{ marginTop: '1.5rem' }}>Seed Events (Global Defaults)</div>
-      <SeedEventsForm
-        settings={seedData?.global ?? {}}
-        onSave={async (s) => {
-          await seedEventSettingsSetGlobal(s)
-          void queryClient.invalidateQueries({ queryKey: ['seed-event-settings-global'] })
-        }}
-      />
+      {seedData && (
+        <SeedEventsForm
+          settings={seedData.global ?? {}}
+          onSave={async (s) => {
+            await seedEventSettingsSetGlobal(s)
+            void queryClient.invalidateQueries({ queryKey: ['seed-event-settings-global'] })
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -342,42 +378,41 @@ export function PREventsSettingsProject({ namespace, project }: { namespace: str
     staleTime: 30_000,
   })
 
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ['pr-event-settings', namespace, project] })
-    void queryClient.invalidateQueries({ queryKey: ['seed-event-settings', namespace, project] })
-  }
-
   return (
     <div className={styles.container}>
       <div className={styles.sectionHeader}>PR Events (Project Override)</div>
-      <PREventsForm
-        settings={data?.project ?? {}}
-        inherited={data?.global}
-        isProject
-        onSave={async (s) => {
-          await prEventSettingsSetProject(namespace, project, s)
-          invalidate()
-        }}
-        onReset={async () => {
-          await prEventSettingsClearProject(namespace, project)
-          invalidate()
-        }}
-      />
+      {data && (
+        <PREventsForm
+          settings={data.project ?? {}}
+          inherited={data.global}
+          isProject
+          onSave={async (s) => {
+            await prEventSettingsSetProject(namespace, project, s)
+            void queryClient.invalidateQueries({ queryKey: ['pr-event-settings', namespace, project] })
+          }}
+          onReset={async () => {
+            await prEventSettingsClearProject(namespace, project)
+            void queryClient.invalidateQueries({ queryKey: ['pr-event-settings', namespace, project] })
+          }}
+        />
+      )}
 
       <div className={styles.sectionHeader} style={{ marginTop: '1.5rem' }}>Seed Events (Project Override)</div>
-      <SeedEventsForm
-        settings={seedData?.project ?? {}}
-        inherited={seedData?.global}
-        isProject
-        onSave={async (s) => {
-          await seedEventSettingsSetProject(namespace, project, s)
-          invalidate()
-        }}
-        onReset={async () => {
-          await seedEventSettingsClearProject(namespace, project)
-          invalidate()
-        }}
-      />
+      {seedData && (
+        <SeedEventsForm
+          settings={seedData.project ?? {}}
+          inherited={seedData.global}
+          isProject
+          onSave={async (s) => {
+            await seedEventSettingsSetProject(namespace, project, s)
+            void queryClient.invalidateQueries({ queryKey: ['seed-event-settings', namespace, project] })
+          }}
+          onReset={async () => {
+            await seedEventSettingsClearProject(namespace, project)
+            void queryClient.invalidateQueries({ queryKey: ['seed-event-settings', namespace, project] })
+          }}
+        />
+      )}
     </div>
   )
 }
