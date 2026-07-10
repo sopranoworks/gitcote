@@ -771,18 +771,22 @@ func extractText(result *mcp.CallToolResult) string {
 
 func TestReviewIncomplete_RetryViaMCP(t *testing.T) {
 	ns, proj := "default", "retryinc"
-	_, _, prStore, ec := setup2StageTest(t, ns, proj)
+	_, hs, prStore, ec := setup2StageTest(t, ns, proj)
 
 	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-retry")
+	hs.EnqueuePR(ns, proj, 1)
 
-	// Simulate review_incomplete interrupt
+	create2StagePR(t, prStore, ns, proj, 2, "feat-queued")
+	hs.EnqueuePR(ns, proj, 2)
+
+	// Simulate review_incomplete interrupt (slot retained)
 	markInterrupted(prStore, pr1, "review_incomplete",
 		"agent exited successfully but did not approve or reject",
 		"default_claude_reviewer", "reviewer", ec.logger)
 
-	p, _ := prStore.Get(1)
-	if p.State != pr.StateInterrupted {
-		t.Fatalf("state = %q, want interrupted", p.State)
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 1 {
+		t.Fatalf("after interrupt: active = %d, want 1 (slot retained)", q.ActivePR)
 	}
 
 	// Set up MCP server and call retry_pr_agent
@@ -833,7 +837,7 @@ func TestReviewIncomplete_RetryViaMCP(t *testing.T) {
 		t.Fatalf("retry_pr_agent returned error: %s", extractText(result))
 	}
 
-	// Immediately after retry, PR should be restored to open
+	// PR restored to open, still holds queue slot
 	retried, _ := prStore.Get(1)
 	if retried.State != pr.StateOpen {
 		t.Fatalf("after retry: state = %q, want open", retried.State)
@@ -841,32 +845,40 @@ func TestReviewIncomplete_RetryViaMCP(t *testing.T) {
 	if retried.InterruptInfo != nil {
 		t.Fatal("after retry: interrupt_info should be nil")
 	}
-	if retried.PreviousState != "" {
-		t.Fatalf("after retry: previous_state = %q, want empty", retried.PreviousState)
+
+	q, _ = hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 1 {
+		t.Fatalf("after retry: active = %d, want 1 (same slot)", q.ActivePR)
+	}
+	if len(q.Waiting) != 1 || q.Waiting[0] != 2 {
+		t.Fatalf("after retry: waiting = %v, want [2]", q.Waiting)
 	}
 
-	// Verify the MCP response confirms the retry
 	text := extractText(result)
 	if !strings.Contains(text, "re-spawned") {
 		t.Fatalf("retry response missing 're-spawned': %s", text)
 	}
-	t.Log("PASS: retry review_incomplete → state restored to open, agent re-spawn initiated")
+	t.Log("PASS: retry within same queue slot, PR #2 still waiting")
 }
 
 func TestReviewIncomplete_DismissViaMCP(t *testing.T) {
 	ns, proj := "default", "dismissinc"
-	_, _, prStore, ec := setup2StageTest(t, ns, proj)
+	_, hs, prStore, ec := setup2StageTest(t, ns, proj)
 
 	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-dismiss")
+	hs.EnqueuePR(ns, proj, 1)
 
-	// Simulate review_incomplete interrupt
+	create2StagePR(t, prStore, ns, proj, 2, "feat-queued")
+	hs.EnqueuePR(ns, proj, 2)
+
+	// Simulate review_incomplete interrupt (slot retained)
 	markInterrupted(prStore, pr1, "review_incomplete",
 		"agent exited successfully but did not approve or reject",
 		"default_claude_reviewer", "reviewer", ec.logger)
 
-	p, _ := prStore.Get(1)
-	if p.State != pr.StateInterrupted {
-		t.Fatalf("state = %q, want interrupted", p.State)
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 1 {
+		t.Fatalf("after interrupt: active = %d, want 1", q.ActivePR)
 	}
 
 	// Set up MCP and call dismiss_pr_interrupt
@@ -917,7 +929,7 @@ func TestReviewIncomplete_DismissViaMCP(t *testing.T) {
 		t.Fatalf("dismiss_pr_interrupt returned error: %s", extractText(result))
 	}
 
-	// After dismiss, PR should be back to open with no interrupt info
+	// After dismiss: PR restored to open, queue slot released
 	dismissed, _ := prStore.Get(1)
 	if dismissed.State != pr.StateOpen {
 		t.Fatalf("after dismiss: state = %q, want open", dismissed.State)
@@ -925,20 +937,32 @@ func TestReviewIncomplete_DismissViaMCP(t *testing.T) {
 	if dismissed.InterruptInfo != nil {
 		t.Fatal("after dismiss: interrupt_info should be nil")
 	}
-	if dismissed.PreviousState != "" {
-		t.Fatalf("after dismiss: previous_state = %q, want empty", dismissed.PreviousState)
+
+	// Queue slot should be released, PR #2 becomes active
+	time.Sleep(50 * time.Millisecond)
+	q, _ = hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 2 {
+		t.Fatalf("after dismiss: active = %d, want 2 (slot released)", q.ActivePR)
 	}
-	t.Log("PASS: dismiss review_incomplete → open, no interrupt info, coherent state")
+
+	text := extractText(result)
+	if !strings.Contains(text, "queue slot released") {
+		t.Fatalf("dismiss response missing 'queue slot released': %s", text)
+	}
+	t.Log("PASS: dismiss releases queue slot, PR #2 becomes active")
 }
 
 func TestReviewIncomplete_RepeatedInterrupt(t *testing.T) {
 	ns, proj := "default", "repeatinc"
-	_, _, prStore, ec := setup2StageTest(t, ns, proj)
+	_, hs, prStore, ec := setup2StageTest(t, ns, proj)
 
 	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-repeat")
+	hs.EnqueuePR(ns, proj, 1)
+
+	create2StagePR(t, prStore, ns, proj, 2, "feat-queued")
+	hs.EnqueuePR(ns, proj, 2)
 
 	for cycle := 1; cycle <= 3; cycle++ {
-		// Mark interrupted with review_incomplete
 		current, _ := prStore.Get(pr1.Number)
 		markInterrupted(prStore, current, "review_incomplete",
 			"agent exited successfully but did not approve or reject",
@@ -948,17 +972,20 @@ func TestReviewIncomplete_RepeatedInterrupt(t *testing.T) {
 		if p.State != pr.StateInterrupted {
 			t.Fatalf("cycle %d: state = %q, want interrupted", cycle, p.State)
 		}
-		if p.InterruptInfo == nil {
-			t.Fatalf("cycle %d: interrupt_info is nil", cycle)
-		}
-		if p.InterruptInfo.Reason != "review_incomplete" {
-			t.Fatalf("cycle %d: reason = %q, want review_incomplete", cycle, p.InterruptInfo.Reason)
-		}
-		if p.PreviousState != pr.StateOpen {
-			t.Fatalf("cycle %d: previous_state = %q, want open", cycle, p.PreviousState)
+		if p.InterruptInfo == nil || p.InterruptInfo.Reason != "review_incomplete" {
+			t.Fatalf("cycle %d: unexpected interrupt_info", cycle)
 		}
 
-		// Simulate retry: restore state (what retry_pr_agent does)
+		// Queue slot must be retained throughout
+		q, _ := hs.GetPRQueue(ns, proj)
+		if q.ActivePR != 1 {
+			t.Fatalf("cycle %d: active = %d, want 1 (slot retained)", cycle, q.ActivePR)
+		}
+		if len(q.Waiting) != 1 || q.Waiting[0] != 2 {
+			t.Fatalf("cycle %d: waiting = %v, want [2]", cycle, q.Waiting)
+		}
+
+		// Simulate retry
 		p.State = p.PreviousState
 		p.PreviousState = ""
 		p.InterruptInfo = nil
@@ -966,13 +993,8 @@ func TestReviewIncomplete_RepeatedInterrupt(t *testing.T) {
 		if err := prStore.Update(p); err != nil {
 			t.Fatal(err)
 		}
-
-		restored, _ := prStore.Get(1)
-		if restored.State != pr.StateOpen {
-			t.Fatalf("cycle %d after restore: state = %q, want open", cycle, restored.State)
-		}
 	}
-	t.Log("PASS: 3 cycles of review_incomplete → retry → review_incomplete with no stale state")
+	t.Log("PASS: 3 cycles with queue slot retained, PR #2 never jumped ahead")
 }
 
 func runGit2Stage(t *testing.T, dir string, args ...string) {

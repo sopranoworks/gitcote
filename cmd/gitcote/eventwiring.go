@@ -215,7 +215,6 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 		if serr == nil {
 			markInterrupted(prStore, p, "agent_spawn_failed", fmt.Sprintf("scan configs: %v", err), action.AgentName, role, ec.logger)
 		}
-		releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 		return
 	}
 
@@ -235,7 +234,6 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 		if serr == nil {
 			markInterrupted(prStore, p, "agent_spawn_failed", "no agent config found for role: "+role, action.AgentName, role, ec.logger)
 		}
-		releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 		return
 	}
 
@@ -265,7 +263,6 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 						markInterrupted(prStore, current, "review_incomplete",
 							"agent exited successfully but did not approve or reject",
 							ac.DirName, role, ec.logger)
-						releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 						return
 					}
 				}
@@ -296,7 +293,6 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 		if serr == nil {
 			markInterrupted(prStore, p, "agent_spawn_failed", detail, ac.DirName, role, ec.logger)
 		}
-		releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 	}
 }
 

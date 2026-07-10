@@ -226,7 +226,7 @@ func TestPRQueue_ReleaseOnClose(t *testing.T) {
 	}
 }
 
-func TestPRQueue_ReleaseOnInterrupt(t *testing.T) {
+func TestPRQueue_InterruptRetainsSlot(t *testing.T) {
 	ns, proj := "default", "intq"
 	_, hs, prStore, ec := setupQueueTest(t, ns, proj)
 
@@ -236,29 +236,72 @@ func TestPRQueue_ReleaseOnInterrupt(t *testing.T) {
 	createTestPR(t, prStore, ns, proj, 2, "feat-2")
 	hs.EnqueuePR(ns, proj, 2)
 
-	// Interrupt PR #1 → PR #2 becomes active
+	// Interrupt PR #1 — slot should be RETAINED
 	markInterrupted(prStore, pr1, "agent_failed", "exit code 1", "test-agent", "reviewer", ec.logger)
 
-	releasePRSlotAndDequeue(ec, ns, proj, 1)
-	time.Sleep(50 * time.Millisecond)
-
 	q, _ := hs.GetPRQueue(ns, proj)
-	if q.ActivePR != 2 {
-		t.Errorf("after interrupt #1: active = %d, want 2", q.ActivePR)
+	if q.ActivePR != 1 {
+		t.Errorf("after interrupt: active = %d, want 1 (slot retained)", q.ActivePR)
 	}
-	if len(q.Waiting) != 0 {
-		t.Errorf("after interrupt #1: waiting = %v, want []", q.Waiting)
+	if len(q.Waiting) != 1 || q.Waiting[0] != 2 {
+		t.Errorf("after interrupt: waiting = %v, want [2]", q.Waiting)
 	}
 
-	// Verify PR #1 is in interrupted state
 	p, _ := prStore.Get(1)
 	if p.State != pr.StateInterrupted {
 		t.Errorf("PR #1 state = %q, want interrupted", p.State)
 	}
+
+	// Dismiss releases the slot → PR #2 becomes active
+	p.State = p.PreviousState
+	p.PreviousState = ""
+	p.InterruptInfo = nil
+	p.UpdatedAt = time.Now()
+	_ = prStore.Update(p)
+	releasePRSlotAndDequeue(ec, ns, proj, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	q, _ = hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 2 {
+		t.Errorf("after dismiss: active = %d, want 2", q.ActivePR)
+	}
 }
 
-func TestPRQueue_ReviewIncomplete(t *testing.T) {
+func TestPRQueue_ReviewIncompleteRetainsSlot(t *testing.T) {
 	ns, proj := "default", "reviewinc"
+	_, hs, prStore, _ := setupQueueTest(t, ns, proj)
+
+	pr1 := createTestPR(t, prStore, ns, proj, 1, "feat-1")
+	hs.EnqueuePR(ns, proj, 1)
+
+	createTestPR(t, prStore, ns, proj, 2, "feat-2")
+	hs.EnqueuePR(ns, proj, 2)
+
+	current, _ := prStore.Get(pr1.Number)
+	markInterrupted(prStore, current, "review_incomplete",
+		"agent exited successfully but did not approve or reject",
+		"test-agent", "reviewer", slog.Default())
+
+	// Slot should be retained — PR #2 must NOT become active
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 1 {
+		t.Errorf("after review_incomplete: active = %d, want 1 (slot retained)", q.ActivePR)
+	}
+	if len(q.Waiting) != 1 || q.Waiting[0] != 2 {
+		t.Errorf("after review_incomplete: waiting = %v, want [2]", q.Waiting)
+	}
+
+	p, _ := prStore.Get(1)
+	if p.State != pr.StateInterrupted {
+		t.Errorf("PR #1 state = %q, want interrupted", p.State)
+	}
+	if p.InterruptInfo == nil || p.InterruptInfo.Reason != "review_incomplete" {
+		t.Errorf("PR #1 interrupt reason = %v, want review_incomplete", p.InterruptInfo)
+	}
+}
+
+func TestPRQueue_SlotRetainedThroughRetryCycle(t *testing.T) {
+	ns, proj := "default", "retrycycle"
 	_, hs, prStore, ec := setupQueueTest(t, ns, proj)
 
 	pr1 := createTestPR(t, prStore, ns, proj, 1, "feat-1")
@@ -267,43 +310,86 @@ func TestPRQueue_ReviewIncomplete(t *testing.T) {
 	createTestPR(t, prStore, ns, proj, 2, "feat-2")
 	hs.EnqueuePR(ns, proj, 2)
 
-	// Simulate reviewer exiting 0 without calling approve/reject:
-	// PR is still open → detect and mark interrupted with review_incomplete
-	current, err := prStore.Get(pr1.Number)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if current.State != pr.StateOpen {
-		t.Fatalf("PR #1 state = %q, want open", current.State)
+	for cycle := 1; cycle <= 3; cycle++ {
+		// Interrupt
+		current, _ := prStore.Get(pr1.Number)
+		markInterrupted(prStore, current, "review_incomplete",
+			"agent exited without verdict", "test-agent", "reviewer", ec.logger)
+
+		q, _ := hs.GetPRQueue(ns, proj)
+		if q.ActivePR != 1 {
+			t.Fatalf("cycle %d after interrupt: active = %d, want 1", cycle, q.ActivePR)
+		}
+
+		// Retry (restore state, agent would re-spawn in same slot)
+		p, _ := prStore.Get(1)
+		p.State = p.PreviousState
+		p.PreviousState = ""
+		p.InterruptInfo = nil
+		p.UpdatedAt = time.Now()
+		_ = prStore.Update(p)
+
+		q, _ = hs.GetPRQueue(ns, proj)
+		if q.ActivePR != 1 {
+			t.Fatalf("cycle %d after retry: active = %d, want 1", cycle, q.ActivePR)
+		}
 	}
 
-	markInterrupted(prStore, current, "review_incomplete",
-		"agent exited successfully but did not approve or reject",
-		"test-agent", "reviewer", ec.logger)
+	// Terminal outcome (approve+merge) releases the slot
+	p, _ := prStore.Get(1)
+	now := time.Now()
+	p.State = pr.StateMerged
+	p.MergedAt = &now
+	p.UpdatedAt = now
+	_ = prStore.Update(p)
+
 	releasePRSlotAndDequeue(ec, ns, proj, 1)
 	time.Sleep(50 * time.Millisecond)
 
-	// Queue should advance
 	q, _ := hs.GetPRQueue(ns, proj)
 	if q.ActivePR != 2 {
-		t.Errorf("after review_incomplete #1: active = %d, want 2", q.ActivePR)
+		t.Errorf("after merge: active = %d, want 2", q.ActivePR)
 	}
-	if len(q.Waiting) != 0 {
-		t.Errorf("after review_incomplete #1: waiting = %v, want []", q.Waiting)
+}
+
+func TestPRQueue_DismissReleasesSlot(t *testing.T) {
+	ns, proj := "default", "dismissq"
+	_, hs, prStore, ec := setupQueueTest(t, ns, proj)
+
+	pr1 := createTestPR(t, prStore, ns, proj, 1, "feat-1")
+	hs.EnqueuePR(ns, proj, 1)
+
+	createTestPR(t, prStore, ns, proj, 2, "feat-2")
+	hs.EnqueuePR(ns, proj, 2)
+
+	// Interrupt retains slot
+	markInterrupted(prStore, pr1, "agent_failed", "exit code 1", "test-agent", "reviewer", ec.logger)
+
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 1 {
+		t.Fatalf("after interrupt: active = %d, want 1", q.ActivePR)
 	}
 
-	// PR #1 should be interrupted with review_incomplete reason
+	// Dismiss: restore state + release slot
 	p, _ := prStore.Get(1)
-	if p.State != pr.StateInterrupted {
-		t.Errorf("PR #1 state = %q, want interrupted", p.State)
+	p.State = p.PreviousState
+	p.PreviousState = ""
+	p.InterruptInfo = nil
+	p.UpdatedAt = time.Now()
+	_ = prStore.Update(p)
+	releasePRSlotAndDequeue(ec, ns, proj, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	q, _ = hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 2 {
+		t.Errorf("after dismiss: active = %d, want 2", q.ActivePR)
 	}
-	if p.InterruptInfo == nil {
-		t.Fatal("PR #1 interrupt_info is nil")
+	if len(q.Waiting) != 0 {
+		t.Errorf("after dismiss: waiting = %v, want []", q.Waiting)
 	}
-	if p.InterruptInfo.Reason != "review_incomplete" {
-		t.Errorf("PR #1 interrupt reason = %q, want review_incomplete", p.InterruptInfo.Reason)
-	}
-	if p.PreviousState != pr.StateOpen {
-		t.Errorf("PR #1 previous_state = %q, want open", p.PreviousState)
+
+	dismissed, _ := prStore.Get(1)
+	if dismissed.State != pr.StateOpen {
+		t.Errorf("dismissed PR state = %q, want open", dismissed.State)
 	}
 }

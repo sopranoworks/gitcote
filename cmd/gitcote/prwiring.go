@@ -718,7 +718,9 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 			return nil, dismissPRInterruptOutput{}, err
 		}
 
-		return nil, dismissPRInterruptOutput{Number: p.Number, State: string(p.State), Message: "interrupt dismissed"}, nil
+		releasePRSlotAndDequeue(ec, in.Namespace, in.ProjectName, int(p.Number))
+
+		return nil, dismissPRInterruptOutput{Number: p.Number, State: string(p.State), Message: "interrupt dismissed, queue slot released"}, nil
 	})
 }
 
@@ -1342,10 +1344,12 @@ func handlePRDismissInterrupt(c *uiws.Client, gitStore *git.Store, ec *eventCont
 		return
 	}
 
+	releasePRSlotAndDequeue(ec, p.Namespace, p.ProjectName, int(pullReq.Number))
+
 	c.SendResponse(MsgPRDismissInterrupt, map[string]interface{}{
 		"number":  pullReq.Number,
 		"state":   string(pullReq.State),
-		"message": "interrupt dismissed",
+		"message": "interrupt dismissed, queue slot released",
 	})
 }
 
