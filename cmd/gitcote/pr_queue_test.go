@@ -396,6 +396,193 @@ func TestPRQueue_DismissReleasesSlot(t *testing.T) {
 	}
 }
 
+func TestPRQueue_MergerInterruptRetainsSlot(t *testing.T) {
+	ns, proj := "default", "mergerint"
+	_, hs, prStore, _ := setupQueueTest(t, ns, proj)
+
+	pr1 := createTestPR(t, prStore, ns, proj, 1, "feat-1")
+	pr1.State = pr.StateMergeConflict
+	pr1.Mergeable = pr.MergeableConflict
+	pr1.UpdatedAt = time.Now()
+	if err := prStore.Update(pr1); err != nil {
+		t.Fatal(err)
+	}
+	hs.EnqueuePR(ns, proj, 1)
+
+	createTestPR(t, prStore, ns, proj, 2, "feat-2")
+	hs.EnqueuePR(ns, proj, 2)
+
+	current, _ := prStore.Get(pr1.Number)
+	markInterrupted(prStore, current, "merge_still_conflicting",
+		"merger agent succeeded but conflicts persist",
+		"test-merger", "merger", slog.Default())
+
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 1 {
+		t.Errorf("after merge_still_conflicting: active = %d, want 1 (slot retained)", q.ActivePR)
+	}
+	if len(q.Waiting) != 1 || q.Waiting[0] != 2 {
+		t.Errorf("after merge_still_conflicting: waiting = %v, want [2]", q.Waiting)
+	}
+
+	p, _ := prStore.Get(1)
+	if p.State != pr.StateInterrupted {
+		t.Errorf("PR #1 state = %q, want interrupted", p.State)
+	}
+	if p.PreviousState != pr.StateMergeConflict {
+		t.Errorf("PR #1 previous_state = %q, want merge_conflict", p.PreviousState)
+	}
+	if p.InterruptInfo == nil || p.InterruptInfo.Reason != "merge_still_conflicting" {
+		t.Errorf("PR #1 interrupt reason = %v, want merge_still_conflicting", p.InterruptInfo)
+	}
+	if p.InterruptInfo.AgentRole != "merger" {
+		t.Errorf("PR #1 interrupt agent_role = %q, want merger", p.InterruptInfo.AgentRole)
+	}
+}
+
+func TestPRQueue_MergeIncompleteRetainsSlot(t *testing.T) {
+	ns, proj := "default", "mergeinc"
+	_, hs, prStore, _ := setupQueueTest(t, ns, proj)
+
+	pr1 := createTestPR(t, prStore, ns, proj, 1, "feat-1")
+	pr1.State = pr.StateMergeConflict
+	pr1.UpdatedAt = time.Now()
+	if err := prStore.Update(pr1); err != nil {
+		t.Fatal(err)
+	}
+	hs.EnqueuePR(ns, proj, 1)
+
+	createTestPR(t, prStore, ns, proj, 2, "feat-2")
+	hs.EnqueuePR(ns, proj, 2)
+
+	current, _ := prStore.Get(pr1.Number)
+	markInterrupted(prStore, current, "merge_incomplete",
+		"open repo: repository not found",
+		"test-merger", "merger", slog.Default())
+
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 1 {
+		t.Errorf("after merge_incomplete: active = %d, want 1 (slot retained)", q.ActivePR)
+	}
+	if len(q.Waiting) != 1 || q.Waiting[0] != 2 {
+		t.Errorf("after merge_incomplete: waiting = %v, want [2]", q.Waiting)
+	}
+
+	p, _ := prStore.Get(1)
+	if p.State != pr.StateInterrupted {
+		t.Errorf("PR #1 state = %q, want interrupted", p.State)
+	}
+	if p.InterruptInfo == nil || p.InterruptInfo.Reason != "merge_incomplete" {
+		t.Errorf("PR #1 interrupt reason = %v, want merge_incomplete", p.InterruptInfo)
+	}
+}
+
+func TestPRQueue_MergerSlotRetainedThroughRetryCycle(t *testing.T) {
+	ns, proj := "default", "mergerretry"
+	_, hs, prStore, ec := setupQueueTest(t, ns, proj)
+
+	pr1 := createTestPR(t, prStore, ns, proj, 1, "feat-1")
+	pr1.State = pr.StateMergeConflict
+	pr1.UpdatedAt = time.Now()
+	if err := prStore.Update(pr1); err != nil {
+		t.Fatal(err)
+	}
+	hs.EnqueuePR(ns, proj, 1)
+
+	createTestPR(t, prStore, ns, proj, 2, "feat-2")
+	hs.EnqueuePR(ns, proj, 2)
+
+	for cycle := 1; cycle <= 3; cycle++ {
+		current, _ := prStore.Get(pr1.Number)
+		markInterrupted(prStore, current, "merge_still_conflicting",
+			"merger agent succeeded but conflicts persist",
+			"test-merger", "merger", ec.logger)
+
+		q, _ := hs.GetPRQueue(ns, proj)
+		if q.ActivePR != 1 {
+			t.Fatalf("cycle %d after interrupt: active = %d, want 1", cycle, q.ActivePR)
+		}
+		if len(q.Waiting) != 1 || q.Waiting[0] != 2 {
+			t.Fatalf("cycle %d after interrupt: waiting = %v, want [2]", cycle, q.Waiting)
+		}
+
+		p, _ := prStore.Get(1)
+		p.State = p.PreviousState
+		p.PreviousState = ""
+		p.InterruptInfo = nil
+		p.UpdatedAt = time.Now()
+		_ = prStore.Update(p)
+
+		q, _ = hs.GetPRQueue(ns, proj)
+		if q.ActivePR != 1 {
+			t.Fatalf("cycle %d after retry: active = %d, want 1", cycle, q.ActivePR)
+		}
+	}
+
+	// Terminal outcome (merge succeeds) releases the slot
+	p, _ := prStore.Get(1)
+	now := time.Now()
+	p.State = pr.StateMerged
+	p.MergedAt = &now
+	p.UpdatedAt = now
+	_ = prStore.Update(p)
+
+	releasePRSlotAndDequeue(ec, ns, proj, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 2 {
+		t.Errorf("after merge: active = %d, want 2", q.ActivePR)
+	}
+}
+
+func TestPRQueue_MergerDismissReleasesSlot(t *testing.T) {
+	ns, proj := "default", "mergerdismiss"
+	_, hs, prStore, ec := setupQueueTest(t, ns, proj)
+
+	pr1 := createTestPR(t, prStore, ns, proj, 1, "feat-1")
+	pr1.State = pr.StateMergeConflict
+	pr1.UpdatedAt = time.Now()
+	if err := prStore.Update(pr1); err != nil {
+		t.Fatal(err)
+	}
+	hs.EnqueuePR(ns, proj, 1)
+
+	createTestPR(t, prStore, ns, proj, 2, "feat-2")
+	hs.EnqueuePR(ns, proj, 2)
+
+	markInterrupted(prStore, pr1, "merge_still_conflicting",
+		"merger agent succeeded but conflicts persist",
+		"test-merger", "merger", ec.logger)
+
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 1 {
+		t.Fatalf("after interrupt: active = %d, want 1", q.ActivePR)
+	}
+
+	p, _ := prStore.Get(1)
+	p.State = p.PreviousState
+	p.PreviousState = ""
+	p.InterruptInfo = nil
+	p.UpdatedAt = time.Now()
+	_ = prStore.Update(p)
+	releasePRSlotAndDequeue(ec, ns, proj, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	q, _ = hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 2 {
+		t.Errorf("after dismiss: active = %d, want 2", q.ActivePR)
+	}
+	if len(q.Waiting) != 0 {
+		t.Errorf("after dismiss: waiting = %v, want []", q.Waiting)
+	}
+
+	dismissed, _ := prStore.Get(1)
+	if dismissed.State != pr.StateMergeConflict {
+		t.Errorf("dismissed PR state = %q, want merge_conflict", dismissed.State)
+	}
+}
+
 func TestNotifyInterrupt_FiresWhenEnabled(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
@@ -419,6 +606,7 @@ func TestNotifyInterrupt_FiresWhenEnabled(t *testing.T) {
 	output := buf.String()
 	for _, want := range []string{
 		"PR notification",
+		"PR reviewer interrupted",
 		"review_incomplete",
 		"agent exited successfully",
 		"default_claude_reviewer",
@@ -506,5 +694,50 @@ func TestNotifyInterrupt_NoLinkWithoutURL(t *testing.T) {
 
 	if strings.Contains(buf.String(), "Link:") {
 		t.Error("should not include Link when gitcoteURL is empty")
+	}
+}
+
+func TestNotifyInterrupt_MergerReasons(t *testing.T) {
+	reasons := []struct {
+		reason string
+		detail string
+		role   string
+	}{
+		{"merge_still_conflicting", "merger agent succeeded but conflicts persist", "merger"},
+		{"merge_incomplete", "open repo: repository not found", "merger"},
+		{"merge_incomplete", "resolve source branch: reference not found", "merger"},
+		{"merge_incomplete", "create merge commit: tree hash mismatch", "merger"},
+		{"agent_spawn_failed", "exit code 1", "merger"},
+		{"agent_spawn_failed", "no MCP activity for 5m0s", "merger"},
+	}
+
+	for _, tc := range reasons {
+		t.Run(tc.reason+"_"+tc.detail[:min(20, len(tc.detail))], func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, nil))
+			ec := &eventContext{logger: logger, gitcoteURL: "http://localhost:9090"}
+			p := &pr.PullRequest{
+				Number:        42,
+				RepoNamespace: "ns",
+				RepoProject:   "proj",
+				Title:         "Fix conflicts",
+			}
+
+			notifyInterrupt(ec, "log", p, tc.reason, tc.detail, "test-merger", tc.role)
+
+			output := buf.String()
+			if !strings.Contains(output, tc.reason) {
+				t.Errorf("missing reason %q in: %s", tc.reason, output)
+			}
+			if !strings.Contains(output, tc.detail) {
+				t.Errorf("missing detail %q in: %s", tc.detail, output)
+			}
+			if !strings.Contains(output, "PR merger interrupted") {
+				t.Errorf("missing role-aware header 'PR merger interrupted' in: %s", output)
+			}
+			if !strings.Contains(output, "http://localhost:9090/p/ns/proj/prs?pr=42") {
+				t.Errorf("missing WebUI link in: %s", output)
+			}
+		})
 	}
 }

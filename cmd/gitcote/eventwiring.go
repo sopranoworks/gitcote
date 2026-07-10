@@ -186,7 +186,7 @@ func notify(method, message string, namespace, project string, prNumber uint32, 
 
 func notifyInterrupt(ec *eventContext, method string, p *pr.PullRequest, reason, detail, agentName, agentRole string) {
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "[GitCote] PR review interrupted: %s/%s PR #%d", p.RepoNamespace, p.RepoProject, p.Number)
+	fmt.Fprintf(&msg, "[GitCote] PR %s interrupted: %s/%s PR #%d", agentRole, p.RepoNamespace, p.RepoProject, p.Number)
 	fmt.Fprintf(&msg, "\nReason: %s", reason)
 	if detail != "" {
 		fmt.Fprintf(&msg, "\nDetail: %s", detail)
@@ -281,7 +281,14 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 		result := executeAgentForPR(ec, ac, p, role)
 		if result != nil && result.ExitCode == 0 {
 			if role == "merger" {
-				reattemptMerge(ec, p, ac.DirName, role)
+				if !reattemptMerge(ec, p, ac.DirName, role) {
+					if action.NotifyEnabled && p.InterruptInfo != nil {
+						go notifyInterrupt(ec, action.NotifyMethod, p,
+							p.InterruptInfo.Reason, p.InterruptInfo.Detail,
+							ac.DirName, role)
+					}
+					return
+				}
 			}
 			if role == "reviewer" {
 				prStore, serr := getPRStore(ec.gitStore.BaseDir(), p.RepoNamespace, p.RepoProject)
@@ -499,36 +506,44 @@ func executeWithActivityTimeout(ec *eventContext, ac *agent.AgentConfig, spawnCt
 // reattemptMerge re-attempts the merge after a successful merger agent.
 // Unlike autoMergePR, it does not fire onPRMergeConflict if conflicts persist
 // (to prevent infinite re-spawns). Instead it marks the PR as interrupted.
-func reattemptMerge(ec *eventContext, p *pr.PullRequest, agentName, role string) {
+// Returns true if the merge succeeded (PR is now StateMerged), false on any
+// failure (PR is marked interrupted with the appropriate reason).
+func reattemptMerge(ec *eventContext, p *pr.PullRequest, agentName, role string) bool {
+	prStore, err := getPRStore(ec.gitStore.BaseDir(), p.RepoNamespace, p.RepoProject)
+	if err != nil {
+		ec.logger.Warn("reattempt merge: open PR store", "error", err, "pr", p.Number)
+		return false
+	}
+
 	repo, err := ec.gitStore.OpenRepo(p.RepoNamespace, p.RepoProject)
 	if err != nil {
 		ec.logger.Warn("reattempt merge: open repo", "error", err, "pr", p.Number)
-		return
+		markInterrupted(prStore, p, "merge_incomplete",
+			fmt.Sprintf("open repo: %v", err), agentName, role, ec.logger)
+		return false
 	}
 	sourceHash, err := git.ResolveBranch(repo, p.SourceBranch)
 	if err != nil {
 		ec.logger.Warn("reattempt merge: resolve source", "error", err, "pr", p.Number)
-		return
+		markInterrupted(prStore, p, "merge_incomplete",
+			fmt.Sprintf("resolve source branch: %v", err), agentName, role, ec.logger)
+		return false
 	}
 	targetHash, _ := git.ResolveBranch(repo, p.TargetBranch)
 
 	mergeResult, err := git.ComputeMerge(repo, targetHash, sourceHash)
 	if err != nil {
 		ec.logger.Warn("reattempt merge: compute", "error", err, "pr", p.Number)
-		return
-	}
-
-	prStore, err := getPRStore(ec.gitStore.BaseDir(), p.RepoNamespace, p.RepoProject)
-	if err != nil {
-		ec.logger.Warn("reattempt merge: open PR store", "error", err, "pr", p.Number)
-		return
+		markInterrupted(prStore, p, "merge_incomplete",
+			fmt.Sprintf("compute merge: %v", err), agentName, role, ec.logger)
+		return false
 	}
 
 	if !mergeResult.Clean {
 		ec.logger.Warn("reattempt merge: still conflicting after merger", "pr", p.Number)
 		markInterrupted(prStore, p, "merge_still_conflicting",
 			"merger agent succeeded but conflicts persist", agentName, role, ec.logger)
-		return
+		return false
 	}
 
 	var mergeHash plumbing.Hash
@@ -536,18 +551,24 @@ func reattemptMerge(ec *eventContext, p *pr.PullRequest, agentName, role string)
 		mergeHash = sourceHash
 		if err := git.CreateBranchRef(repo, p.TargetBranch, sourceHash); err != nil {
 			ec.logger.Warn("reattempt merge: create target ref", "error", err, "pr", p.Number)
-			return
+			markInterrupted(prStore, p, "merge_incomplete",
+				fmt.Sprintf("create target ref: %v", err), agentName, role, ec.logger)
+			return false
 		}
 	} else {
 		msg := fmt.Sprintf("Merge pull request #%d: %s\n\nMerge %s into %s", p.Number, p.Title, p.SourceBranch, p.TargetBranch)
 		mergeHash, err = git.MergeCommitFromTree(repo, mergeResult.TreeHash, targetHash, sourceHash, msg, "GitCote", "gitcote@localhost")
 		if err != nil {
 			ec.logger.Warn("reattempt merge: create commit", "error", err, "pr", p.Number)
-			return
+			markInterrupted(prStore, p, "merge_incomplete",
+				fmt.Sprintf("create merge commit: %v", err), agentName, role, ec.logger)
+			return false
 		}
 		if err := git.UpdateBranchRef(repo, p.TargetBranch, mergeHash, targetHash); err != nil {
 			ec.logger.Warn("reattempt merge: update ref", "error", err, "pr", p.Number)
-			return
+			markInterrupted(prStore, p, "merge_incomplete",
+				fmt.Sprintf("update target ref: %v", err), agentName, role, ec.logger)
+			return false
 		}
 	}
 
@@ -567,6 +588,7 @@ func reattemptMerge(ec *eventContext, p *pr.PullRequest, agentName, role string)
 
 	ec.logger.Info("reattempt merge: PR merged after conflict resolution",
 		"pr", p.Number, "merge_commit", mergeHash.String()[:8])
+	return true
 }
 
 // releasePRSlotAndDequeue releases the queue slot for a completed PR and
