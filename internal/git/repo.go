@@ -57,7 +57,9 @@ func (s *Store) GitDir(namespace, project string) (string, error) {
 }
 
 // IsValidName checks if a name (namespace or project) contains only
-// [a-zA-Z0-9_-]. Mirrors Shoka's internal/utils.IsValidName.
+// [a-zA-Z0-9_-]. Dots are intentionally excluded despite being valid in
+// GitHub repo names: sibling-DB files (<project>.prs.db) would collide
+// with project directories if dots were allowed in names.
 func IsValidName(name string) bool {
 	if name == "" {
 		return false

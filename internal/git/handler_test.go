@@ -296,6 +296,39 @@ func TestIsValidName(t *testing.T) {
 	}
 }
 
+// TestDotInNamePreventsCollision proves that disallowing dots in project names
+// prevents sibling-DB filename collisions. If dots were allowed, project "foo"
+// would create a sibling DB file at <ns>/foo.prs.db, which collides with the
+// repo directory for a project literally named "foo.prs.db".
+func TestDotInNamePreventsCollision(t *testing.T) {
+	store := git.NewStore(t.TempDir())
+
+	colliders := []string{
+		"foo.prs.db",
+		"foo.prs",
+		"bar.baz",
+		"vue.js",
+		"socket.io",
+		".hidden",
+		"name.git",
+	}
+	for _, name := range colliders {
+		if git.IsValidName(name) {
+			t.Errorf("IsValidName(%q) = true; dot-containing names must be rejected to prevent sibling-DB collisions", name)
+		}
+		if _, err := store.ProjectPath("default", name); err == nil {
+			t.Errorf("ProjectPath(default, %q) succeeded; should reject dot-containing names", name)
+		}
+	}
+
+	safe := []string{"foo", "foo-prs-db", "foo_prs_db", "vuejs", "socket-io"}
+	for _, name := range safe {
+		if !git.IsValidName(name) {
+			t.Errorf("IsValidName(%q) = false; sanitized names without dots should be valid", name)
+		}
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	if err := runGitResult(dir, args...); err != nil {
