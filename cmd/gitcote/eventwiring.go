@@ -205,6 +205,46 @@ func notifyInterrupt(ec *eventContext, method string, p *pr.PullRequest, reason,
 	notify(method, msg.String(), p.RepoNamespace, p.RepoProject, p.Number, ec.logger)
 }
 
+// resolveSeedSyncAction resolves the configured event action for a seed
+// sync direction ("pull" or "push"), merging project override over global.
+func resolveSeedSyncAction(ec *eventContext, ns, proj, direction string) integrity.ResolvedEventAction {
+	if ec == nil || ec.integrityHS == nil {
+		return integrity.ResolveEventAction(nil, nil)
+	}
+	global, _ := ec.integrityHS.GetGlobalSeedEventSettings()
+	project, _ := ec.integrityHS.GetProjectSeedEventSettings(ns, proj)
+
+	var globalAction, projectAction *integrity.EventAction
+	if direction == "push" {
+		if global != nil {
+			globalAction = global.OnPushConflict
+		}
+		if project != nil {
+			projectAction = project.OnPushConflict
+		}
+	} else {
+		if global != nil {
+			globalAction = global.OnPullConflict
+		}
+		if project != nil {
+			projectAction = project.OnPullConflict
+		}
+	}
+	return integrity.ResolveEventAction(projectAction, globalAction)
+}
+
+// maybeNotifySeedSyncInterrupt fires notifySeedSyncInterrupt only if the
+// resolved event action for this direction has notifications enabled.
+// Used to alert on seed sync interruption regardless of whether a merger
+// agent was spawned (conflict detection, non-conflict failures) — agent
+// spawn/failure notifications remain handled inside spawnAgentForSeedSync.
+func maybeNotifySeedSyncInterrupt(ec *eventContext, ns, proj, direction, reason, detail string) {
+	action := resolveSeedSyncAction(ec, ns, proj, direction)
+	if action.NotifyEnabled {
+		go notifySeedSyncInterrupt(ec, action.NotifyMethod, ns, proj, reason, detail, "")
+	}
+}
+
 func notifySeedSyncInterrupt(ec *eventContext, method, ns, proj, reason, detail, agentName string) {
 	var msg strings.Builder
 	fmt.Fprintf(&msg, "[GitCote] Seed sync interrupted: %s/%s", ns, proj)
@@ -1175,9 +1215,47 @@ func reconcileExternalSeedSync(store *git.Store, ec *eventContext, ns, proj stri
 		return
 	}
 
+	if cfg.SyncStatus.Direction == "push" {
+		reconcileExternalPushSync(store, ec, ns, proj, logger)
+		return
+	}
+
 	updateSeedSyncState(store, ns, proj, "idle")
 	releaseSeedSyncSlot(ec, ns, proj)
 	logger.Info("seed sync resolved externally (seed ancestor of main)",
+		"namespace", ns, "project", proj)
+}
+
+// reconcileExternalPushSync completes an externally-resolved seed-PUSH
+// conflict. Unlike pull, a manual push to gitcote's own main only proves the
+// operator resolved the conflict LOCALLY — it does not deliver anything to
+// the actual seed remote (the objective of a push sync). Since local main
+// now contains the seed's tip as an ancestor (verified by the caller), a
+// push to seed is a clean fast-forward from the seed's perspective — attempt
+// it before declaring the sync complete. Leave the interrupted state in
+// place if delivery still fails, so the operator is not misled.
+func reconcileExternalPushSync(store *git.Store, ec *eventContext, ns, proj string, logger *slog.Logger) {
+	if ec.seedCtx == nil {
+		logger.Warn("seed sync (push) resolved locally but no seed context available to deliver",
+			"namespace", ns, "project", proj)
+		return
+	}
+	if !acquireSeedLock(&seedPushActive, ns, proj) {
+		// A push is already running elsewhere (e.g. operator-triggered retry); let it finish naturally.
+		return
+	}
+	defer releaseSeedLock(&seedPushActive, ns, proj)
+
+	result := doSeedPush(ec.seedCtx, ec, ns, proj, "main")
+	if !result.Success {
+		logger.Warn("seed sync (push): local conflict resolved but delivery to seed failed",
+			"namespace", ns, "project", proj, "message", result.Message)
+		return
+	}
+
+	updateSeedSyncState(store, ns, proj, "idle")
+	releaseSeedSyncSlot(ec, ns, proj)
+	logger.Info("seed sync (push) resolved externally and delivered to seed",
 		"namespace", ns, "project", proj)
 }
 
@@ -1195,6 +1273,27 @@ func updateSeedSyncState(gitStore *git.Store, ns, proj, state string) {
 		cfg.SyncStatus = &git.SeedSyncStatus{}
 	}
 	cfg.SyncStatus.State = state
+	_ = git.SaveSeedConfig(projPath, cfg)
+}
+
+// updateSeedSyncStateDirection is like updateSeedSyncState but also records
+// which flow ("pull" or "push") produced this state, so reconciliation logic
+// can apply direction-appropriate completion semantics.
+func updateSeedSyncStateDirection(gitStore *git.Store, ns, proj, state, direction string) {
+	projPath, err := gitStore.ProjectPath(ns, proj)
+	if err != nil {
+		return
+	}
+	cfg, err := git.LoadSeedConfig(projPath)
+	if err != nil {
+		_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{State: state, Direction: direction})
+		return
+	}
+	if cfg.SyncStatus == nil {
+		cfg.SyncStatus = &git.SeedSyncStatus{}
+	}
+	cfg.SyncStatus.State = state
+	cfg.SyncStatus.Direction = direction
 	_ = git.SaveSeedConfig(projPath, cfg)
 }
 
@@ -1222,11 +1321,13 @@ func executeSeedPullFromQueue(ec *eventContext, ns, proj string) {
 		updateSeedSyncState(ec.gitStore, ns, proj, "idle")
 		releaseSeedSyncSlot(ec, ns, proj)
 	} else if status == "conflict" {
-		updateSeedSyncState(ec.gitStore, ns, proj, "conflict")
+		updateSeedSyncStateDirection(ec.gitStore, ns, proj, "conflict", "pull")
+		maybeNotifySeedSyncInterrupt(ec, ns, proj, "pull", "pull_conflict", pullResultDetail(result))
 		// Slot retained — agent (if enabled) or operator handles it.
 	} else {
 		ec.logger.Warn("seed sync from queue failed", "ns", ns, "proj", proj, "result", result)
-		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		updateSeedSyncStateDirection(ec.gitStore, ns, proj, "interrupted", "pull")
+		maybeNotifySeedSyncInterrupt(ec, ns, proj, "pull", "pull_failed", pullResultDetail(result))
 		// Slot retained — operator uses retry_seed_sync or dismiss_seed_sync.
 	}
 }

@@ -41,6 +41,7 @@ type SeedConfig struct {
 
 type SeedSyncStatus struct {
 	State       string     `json:"state"`
+	Direction   string     `json:"direction,omitempty"` // "pull" or "push" — which flow last entered conflict/interrupted
 	LastPushAt  *time.Time `json:"last_push_at,omitempty"`
 	LastResult  string     `json:"last_result,omitempty"`
 	PausedSince *time.Time `json:"paused_since,omitempty"`

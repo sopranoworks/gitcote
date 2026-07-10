@@ -398,13 +398,25 @@ func executeSeedPull(sc *seedContext, ec *eventContext, namespace, project, bran
 		if success {
 			releaseSeedSyncSlot(ec, namespace, project)
 		} else if status == "conflict" {
-			updateSeedSyncState(ec.gitStore, namespace, project, "conflict")
+			updateSeedSyncStateDirection(ec.gitStore, namespace, project, "conflict", "pull")
+			maybeNotifySeedSyncInterrupt(ec, namespace, project, "pull", "pull_conflict", pullResultDetail(result))
 		} else if status != "queued" {
-			updateSeedSyncState(ec.gitStore, namespace, project, "interrupted")
+			updateSeedSyncStateDirection(ec.gitStore, namespace, project, "interrupted", "pull")
+			maybeNotifySeedSyncInterrupt(ec, namespace, project, "pull", "pull_failed", pullResultDetail(result))
 		}
 	}
 
 	return result
+}
+
+func pullResultDetail(result map[string]interface{}) string {
+	if errStr, ok := result["error"].(string); ok && errStr != "" {
+		return errStr
+	}
+	if msg, ok := result["message"].(string); ok {
+		return msg
+	}
+	return ""
 }
 
 func doSeedPull(sc *seedContext, ec *eventContext, namespace, project, branch string) map[string]interface{} {
@@ -662,9 +674,11 @@ func executeSeedPushWithMerge(sc *seedContext, ec *eventContext, namespace, proj
 		if result.Success {
 			releaseSeedSyncSlot(ec, namespace, projectName)
 		} else if result.Status == "conflict" {
-			updateSeedSyncState(ec.gitStore, namespace, projectName, "conflict")
+			updateSeedSyncStateDirection(ec.gitStore, namespace, projectName, "conflict", "push")
+			maybeNotifySeedSyncInterrupt(ec, namespace, projectName, "push", "push_conflict", result.Message)
 		} else if result.Status != "queued" {
-			updateSeedSyncState(ec.gitStore, namespace, projectName, "interrupted")
+			updateSeedSyncStateDirection(ec.gitStore, namespace, projectName, "interrupted", "push")
+			maybeNotifySeedSyncInterrupt(ec, namespace, projectName, "push", "push_failed", result.Message)
 		}
 	}
 

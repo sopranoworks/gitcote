@@ -612,6 +612,17 @@ func runGitSeed(t *testing.T, dir string, args ...string) {
 	}
 }
 
+func runGitSeedCapture(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+	return string(out)
+}
+
 func TestSeedSync_ExternalMergeAutoDetected(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found in PATH")
@@ -886,4 +897,600 @@ func TestSeedSync_PRQueueResumesAfterRecovery(t *testing.T) {
 	t.Log("PASS: seed sync dismissed → PR became active → no stale lock → state clean")
 
 	integrityStore.ReleasePRSlot(ns, proj, int(prNum))
+}
+
+// --- Directive 2026-07-11: seed-push parity + notification coverage ---
+
+func TestSeedPush_ConcurrentCallsOneProceeds(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+	ns, proj := "conc", "push"
+	sc, ec, _ := setupSeedSyncTest(t, ns, proj)
+
+	// Create a local commit so there is actually something to push.
+	projPath, _ := sc.gitStore.ProjectPath(ns, proj)
+	writeTestFile(t, projPath, "new.txt", "local change\n")
+	runGitE2E(t, projPath, "add", ".")
+	runGitE2E(t, projPath, "commit", "-m", "local change to push")
+
+	var wg sync.WaitGroup
+	results := make([]SeedPushResult, 2)
+
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			results[idx] = executeSeedPushWithMerge(sc, ec, ns, proj, "main")
+		}(i)
+	}
+	wg.Wait()
+
+	succeeded := 0
+	inProgress := 0
+	for _, r := range results {
+		if r.Success {
+			succeeded++
+		}
+		if r.Status == "in_progress" {
+			inProgress++
+		}
+	}
+
+	if succeeded < 1 {
+		t.Fatalf("expected at least one success, results: %+v", results)
+	}
+	if inProgress < 1 {
+		t.Fatalf("expected the re-entrancy guard to reject at least one concurrent push (real race, not just the wrapper), results: %+v", results)
+	}
+	t.Logf("PASS: concurrent pushes — %d succeeded, %d in_progress (real re-entrancy race, not just lock wrapper)", succeeded, inProgress)
+}
+
+func TestSeedSync_PushSlotRetainedOnConflict(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+	ns, proj := "pslot", "conflict"
+	sc, ec, hs := setupSeedSyncTest(t, ns, proj)
+
+	projPath, _ := sc.gitStore.ProjectPath(ns, proj)
+	cfg, _ := git.LoadSeedConfig(projPath)
+
+	// Diverging commit on seed.
+	cloneDir := filepath.Join(t.TempDir(), "seed-clone")
+	runGitE2E(t, t.TempDir(), "clone", cfg.SeedURL, cloneDir)
+	writeTestFile(t, cloneDir, "conflict.txt", "seed version\n")
+	runGitE2E(t, cloneDir, "add", ".")
+	runGitE2E(t, cloneDir, "commit", "-m", "seed-side change")
+	runGitE2E(t, cloneDir, "push", "origin", "HEAD:main")
+
+	// Diverging commit locally (so push is rejected as non-fast-forward, then conflicts on merge).
+	writeTestFile(t, projPath, "conflict.txt", "local version\n")
+	runGitE2E(t, projPath, "add", ".")
+	runGitE2E(t, projPath, "commit", "-m", "local-side change")
+
+	result := executeSeedPushWithMerge(sc, ec, ns, proj, "main")
+	if result.Status != "conflict" {
+		t.Fatalf("expected conflict, got %q: %+v", result.Status, result)
+	}
+
+	q, err := hs.GetPRQueue(ns, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.ActivePR != integrity.SeedSyncSentinel {
+		t.Fatalf("expected SeedSyncSentinel as active queue entry, got %d", q.ActivePR)
+	}
+	t.Log("PASS: queue slot retained on push conflict")
+
+	cfgAfter, _ := git.LoadSeedConfig(projPath)
+	if cfgAfter.SyncStatus == nil || cfgAfter.SyncStatus.State != "conflict" {
+		t.Fatalf("expected state=conflict, got %v", cfgAfter.SyncStatus)
+	}
+	if cfgAfter.SyncStatus.Direction != "push" {
+		t.Fatalf("expected direction=push, got %q", cfgAfter.SyncStatus.Direction)
+	}
+	t.Log("PASS: sync status records direction=push on push conflict")
+
+	hs.ReleasePRSlot(ns, proj, integrity.SeedSyncSentinel)
+	if result.TempCloneDir != "" {
+		os.RemoveAll(result.TempCloneDir)
+	}
+}
+
+func TestSeedSync_PushSlotRetainedOnNonConflictFailure(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+	ns, proj := "pslot", "fail"
+	sc, ec, hs := setupSeedSyncTest(t, ns, proj)
+
+	projPath, _ := sc.gitStore.ProjectPath(ns, proj)
+	cfg := &git.SeedConfig{
+		SeedURL:  "/nonexistent/seed.git",
+		KeyName:  "test-key",
+		PushMode: git.PushModeDisabled,
+	}
+	if err := git.SaveSeedConfig(projPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	result := executeSeedPushWithMerge(sc, ec, ns, proj, "main")
+	if result.Success {
+		t.Fatal("expected failure, got success")
+	}
+	if result.Status == "conflict" {
+		t.Fatal("expected non-conflict failure")
+	}
+
+	q, err := hs.GetPRQueue(ns, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.ActivePR != integrity.SeedSyncSentinel {
+		t.Fatalf("expected slot retained on non-conflict push failure, got ActivePR=%d", q.ActivePR)
+	}
+
+	cfgAfter, _ := git.LoadSeedConfig(projPath)
+	if cfgAfter.SyncStatus == nil || cfgAfter.SyncStatus.State != "interrupted" {
+		t.Fatalf("expected state=interrupted, got %v", cfgAfter.SyncStatus)
+	}
+	if cfgAfter.SyncStatus.Direction != "push" {
+		t.Fatalf("expected direction=push, got %q", cfgAfter.SyncStatus.Direction)
+	}
+	t.Log("PASS: slot retained and state=interrupted/direction=push on non-conflict push failure")
+
+	hs.ReleasePRSlot(ns, proj, integrity.SeedSyncSentinel)
+}
+
+func TestSeedSync_NotificationFiresOnPushConflict(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+	ns, proj := "pnotify", "conflict"
+	sc, ec, hs := setupSeedSyncTest(t, ns, proj)
+
+	var buf bytes.Buffer
+	ec.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ec.gitcoteURL = "https://gitcote.example.com"
+
+	// Enable notifications on push conflict, agent disabled so only the
+	// conflict-detection notify path fires (not the agent-failure path).
+	notifyEnabled := true
+	agentEnabled := false
+	if err := hs.SetGlobalSeedEventSettings(&integrity.SeedEventSettings{
+		OnPushConflict: &integrity.EventAction{
+			NotifyEnabled: &notifyEnabled,
+			NotifyMethod:  "log",
+			AgentEnabled:  &agentEnabled,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	projPath, _ := sc.gitStore.ProjectPath(ns, proj)
+	cfg, _ := git.LoadSeedConfig(projPath)
+	cloneDir := filepath.Join(t.TempDir(), "seed-clone")
+	runGitE2E(t, t.TempDir(), "clone", cfg.SeedURL, cloneDir)
+	writeTestFile(t, cloneDir, "conflict.txt", "seed version\n")
+	runGitE2E(t, cloneDir, "add", ".")
+	runGitE2E(t, cloneDir, "commit", "-m", "seed-side change")
+	runGitE2E(t, cloneDir, "push", "origin", "HEAD:main")
+
+	writeTestFile(t, projPath, "conflict.txt", "local version\n")
+	runGitE2E(t, projPath, "add", ".")
+	runGitE2E(t, projPath, "commit", "-m", "local-side change")
+
+	result := executeSeedPushWithMerge(sc, ec, ns, proj, "main")
+	if result.Status != "conflict" {
+		t.Fatalf("expected conflict, got %q: %+v", result.Status, result)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "Seed sync interrupted") {
+		t.Fatalf("expected notification to fire on bare push conflict (no agent involved), got log: %s", logged)
+	}
+	if !strings.Contains(logged, "push_conflict") {
+		t.Fatalf("expected reason=push_conflict in notification, got: %s", logged)
+	}
+	if !strings.Contains(logged, ns+"/"+proj) {
+		t.Fatalf("expected namespace/project in notification, got: %s", logged)
+	}
+	t.Log("PASS: notification fires directly on push conflict detection, without requiring an agent to run/fail first")
+
+	hs.ReleasePRSlot(ns, proj, integrity.SeedSyncSentinel)
+	if result.TempCloneDir != "" {
+		os.RemoveAll(result.TempCloneDir)
+	}
+}
+
+func TestSeedSync_NotificationFiresOnPushNonConflictFailure(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+	ns, proj := "pnotify", "fail"
+	sc, ec, hs := setupSeedSyncTest(t, ns, proj)
+
+	var buf bytes.Buffer
+	ec.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	notifyEnabled := true
+	if err := hs.SetGlobalSeedEventSettings(&integrity.SeedEventSettings{
+		OnPushConflict: &integrity.EventAction{
+			NotifyEnabled: &notifyEnabled,
+			NotifyMethod:  "log",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	projPath, _ := sc.gitStore.ProjectPath(ns, proj)
+	cfg := &git.SeedConfig{
+		SeedURL:  "/nonexistent/seed.git",
+		KeyName:  "test-key",
+		PushMode: git.PushModeDisabled,
+	}
+	if err := git.SaveSeedConfig(projPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	result := executeSeedPushWithMerge(sc, ec, ns, proj, "main")
+	if result.Success || result.Status == "conflict" {
+		t.Fatalf("expected non-conflict failure, got: %+v", result)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "Seed sync interrupted") {
+		t.Fatalf("expected notification to fire on non-conflict push failure, got log: %s", logged)
+	}
+	if !strings.Contains(logged, "push_failed") {
+		t.Fatalf("expected reason=push_failed in notification, got: %s", logged)
+	}
+	t.Log("PASS: notification fires on non-conflict push failure (e.g. bad seed URL / auth), not just conflicts")
+
+	hs.ReleasePRSlot(ns, proj, integrity.SeedSyncSentinel)
+}
+
+func TestSeedSync_PeriodicPushGoesThroughGuardedFunction(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+	ns, proj := "periodic", "guarded"
+	sc, ec, hs := setupSeedSyncTest(t, ns, proj)
+
+	projPath, _ := sc.gitStore.ProjectPath(ns, proj)
+	cfg, _ := git.LoadSeedConfig(projPath)
+	cfg.PushMode = git.PushModePeriodic
+	cfg.PushInterval = ""
+	if err := git.SaveSeedConfig(projPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, projPath, "new.txt", "local change\n")
+	runGitE2E(t, projPath, "add", ".")
+	runGitE2E(t, projPath, "commit", "-m", "local change to push")
+
+	markerPath := filepath.Join(projPath, ".seed_last_push")
+	os.Remove(markerPath)
+
+	// Hold the same re-entrancy lock that executeSeedPushWithMerge uses.
+	// If runPeriodicPush truly routes through the guarded function, it
+	// must be blocked and must NOT write the "push succeeded" marker.
+	acquireSeedLock(&seedPushActive, ns, proj)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	runPeriodicPush(sc, ec, logger)
+	releaseSeedLock(&seedPushActive, ns, proj)
+
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Fatal("periodic push should have been blocked by the held re-entrancy lock (bypassing executeSeedPushWithMerge would let it slip through)")
+	}
+	t.Log("PASS: runPeriodicPush is blocked by the seedPushActive re-entrancy lock — confirmed it routes through the guarded executeSeedPushWithMerge, not a bypass path")
+
+	// Now release and confirm periodic push actually succeeds through the real path.
+	runPeriodicPush(sc, ec, logger)
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("expected periodic push to succeed and write marker once unguarded, got: %v", err)
+	}
+	t.Log("PASS: runPeriodicPush succeeds end-to-end once the lock is free")
+
+	hs.ReleasePRSlot(ns, proj, integrity.SeedSyncSentinel)
+}
+
+func TestSeedSync_PRQueueResumesAfterPushRecovery(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+
+	baseDir := t.TempDir()
+	gitStore := git.NewStore(baseDir)
+	ns, proj := "e2e", "pushresume"
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	if err := gitStore.CreateRepo(ns, proj); err != nil {
+		t.Fatal(err)
+	}
+
+	integrityStore, err := integrity.Open(filepath.Join(baseDir, "repo_heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer integrityStore.Close()
+	headStore = integrityStore
+
+	oauthSt, err := oauthstore.Open(filepath.Join(baseDir, "oauth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oauthSt.Close()
+
+	disabled := false
+	ec := &eventContext{
+		gitStore:    gitStore,
+		integrityHS: integrityStore,
+		oauthStore:  oauthSt,
+		agentCfg:    AgentSpawnConfig{Enabled: &disabled},
+		logger:      logger,
+	}
+
+	prStore, err := getPRStore(baseDir, ns, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	thePR := &pr.PullRequest{
+		RepoNamespace: ns,
+		RepoProject:   proj,
+		Title:         "queued behind push sync",
+		SourceBranch:  "feat/queued",
+		TargetBranch:  "main",
+		Author:        "test",
+		State:         pr.StateOpen,
+		Mergeable:     pr.MergeableClean,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		OrderFiles:    []string{},
+		ResultFiles:   []string{},
+	}
+	prNum, err := prStore.Create(thePR)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed push acquires slot first and gets interrupted (direction=push).
+	isActive, err := integrityStore.EnqueuePriority(ns, proj, integrity.SeedSyncSentinel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isActive {
+		t.Fatal("seed sync should be active")
+	}
+	updateSeedSyncStateDirection(gitStore, ns, proj, "interrupted", "push")
+
+	isActive, err = integrityStore.EnqueuePR(ns, proj, int(prNum))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isActive {
+		t.Fatal("PR should be queued behind seed push sync")
+	}
+
+	// No stale push lock while interrupted.
+	if !acquireSeedLock(&seedPushActive, ns, proj) {
+		t.Fatal("push re-entrancy lock should not be held when seed sync is interrupted")
+	}
+	releaseSeedLock(&seedPushActive, ns, proj)
+
+	// Dismiss → releases slot → dequeues PR.
+	ensureNoActiveToken(ec, ns, proj, 0)
+	updateSeedSyncState(gitStore, ns, proj, "idle")
+	releaseSeedSyncSlot(ec, ns, proj)
+
+	time.Sleep(100 * time.Millisecond)
+
+	q, _ := integrityStore.GetPRQueue(ns, proj)
+	if q.ActivePR != int(prNum) {
+		t.Fatalf("expected PR #%d active after push sync dismiss, got ActivePR=%d", prNum, q.ActivePR)
+	}
+
+	p, _ := prStore.Get(prNum)
+	if p.State != pr.StateOpen {
+		t.Fatalf("expected PR state=open (agent disabled, no spawn), got %q", p.State)
+	}
+
+	projPath, _ := gitStore.ProjectPath(ns, proj)
+	cfg, _ := git.LoadSeedConfig(projPath)
+	if cfg.SyncStatus == nil || cfg.SyncStatus.State != "idle" {
+		t.Fatalf("expected seed sync state=idle, got %v", cfg.SyncStatus)
+	}
+
+	if !acquireSeedLock(&seedPushActive, ns, proj) {
+		t.Fatal("push re-entrancy lock should not be held after recovery")
+	}
+	releaseSeedLock(&seedPushActive, ns, proj)
+
+	t.Log("PASS: push seed sync dismissed → PR became active → no stale push lock → state clean")
+
+	integrityStore.ReleasePRSlot(ns, proj, int(prNum))
+}
+
+// TestSeedSync_PushConflictExternalResolveDeliversToSeed verifies that
+// auto-detecting a manually-resolved PUSH conflict does not just clear
+// state — it must actually deliver the resolved commit to the seed remote.
+// A manual push to gitcote's own main only proves the LOCAL side was
+// resolved; the seed repository is untouched until something pushes to it.
+// This is the push/pull semantic asymmetry the ancestor-check reconciliation
+// (built for pull) does not account for when reused blindly for push.
+func TestSeedSync_PushConflictExternalResolveDeliversToSeed(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+
+	baseDir := t.TempDir()
+	gitStore := git.NewStore(baseDir)
+	ns, proj := "e2e", "pushdeliver"
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	if err := gitStore.CreateRepo(ns, proj); err != nil {
+		t.Fatal(err)
+	}
+
+	integrityStore, err := integrity.Open(filepath.Join(baseDir, "repo_heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer integrityStore.Close()
+	headStore = integrityStore
+
+	oauthSt, err := oauthstore.Open(filepath.Join(baseDir, "oauth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oauthSt.Close()
+
+	v, err := vault.Open(filepath.Join(baseDir, "keys.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	if err := v.Unlock("test-password"); err != nil {
+		t.Fatal(err)
+	}
+	keyName := "test-key"
+	if _, err := v.GenerateKey(ns, keyName, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	disabled := false
+	sc := &seedContext{gitStore: gitStore, vault: v, resumed: true}
+	ec := &eventContext{
+		gitStore:    gitStore,
+		integrityHS: integrityStore,
+		oauthStore:  oauthSt,
+		agentCfg:    AgentSpawnConfig{Enabled: &disabled},
+		logger:      logger,
+		seedCtx:     sc,
+	}
+
+	gitHTTP := git.NewHandler(gitStore, logger)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, ec)
+	}
+	authenticator := auth.New(auth.Config{
+		ValidateToken: func(tok string) (auth.Principal, auth.RejectReason, bool) {
+			return auth.Principal{Name: "admin", Email: "admin@test.com", Scope: "*"}, "", true
+		},
+	})
+	httpMux := http.NewServeMux()
+	httpMux.Handle("/", authenticator.Middleware(gitHTTP))
+	ts := httptest.NewServer(httpMux)
+	defer ts.Close()
+
+	seedBareDir := filepath.Join(t.TempDir(), "seed.git")
+	runGitSeed(t, t.TempDir(), "init", "--bare", seedBareDir)
+	runGitSeed(t, seedBareDir, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	cloneDir := t.TempDir()
+	runGitSeed(t, cloneDir, "clone", ts.URL+"/"+ns+"/"+proj+".git", "repo")
+	repoDir := filepath.Join(cloneDir, "repo")
+	runGitSeed(t, repoDir, "checkout", "-b", "main")
+	writeTestFile(t, repoDir, "README.md", "# Seed Push Delivery\n")
+	runGitSeed(t, repoDir, "add", "README.md")
+	runGitSeed(t, repoDir, "commit", "-m", "initial commit")
+	runGitSeed(t, repoDir, "push", "-u", "origin", "main")
+	runGitSeed(t, repoDir, "remote", "add", "seed", seedBareDir)
+	runGitSeed(t, repoDir, "push", "seed", "main")
+
+	projPath, _ := gitStore.ProjectPath(ns, proj)
+	seedCfg := &git.SeedConfig{
+		SeedURL:  seedBareDir,
+		KeyName:  keyName,
+		PushMode: git.PushModeDisabled,
+	}
+	if err := git.SaveSeedConfig(projPath, seedCfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Diverging commits on both sides so the push conflicts.
+	seedCloneDir := filepath.Join(t.TempDir(), "seed-clone")
+	runGitSeed(t, t.TempDir(), "clone", seedBareDir, seedCloneDir)
+	writeTestFile(t, seedCloneDir, "conflict.txt", "seed version\n")
+	runGitSeed(t, seedCloneDir, "add", ".")
+	runGitSeed(t, seedCloneDir, "commit", "-m", "seed-side change")
+	runGitSeed(t, seedCloneDir, "push", "origin", "HEAD:main")
+
+	writeTestFile(t, repoDir, "conflict.txt", "local version\n")
+	runGitSeed(t, repoDir, "add", ".")
+	runGitSeed(t, repoDir, "commit", "-m", "local-side change")
+	runGitSeed(t, repoDir, "push", "origin", "main")
+
+	// Trigger seed push directly against gitcote's own repo — should conflict.
+	result := executeSeedPushWithMerge(sc, ec, ns, proj, "main")
+	if result.Status != "conflict" {
+		t.Fatalf("expected conflict, got %q: %+v", result.Status, result)
+	}
+
+	cfgAfter, _ := git.LoadSeedConfig(projPath)
+	if cfgAfter.SyncStatus == nil || cfgAfter.SyncStatus.State != "conflict" || cfgAfter.SyncStatus.Direction != "push" {
+		t.Fatalf("expected state=conflict/direction=push, got %v", cfgAfter.SyncStatus)
+	}
+
+	// Operator manually resolves the conflict — but only pushes to
+	// gitcote, exactly as the temp-clone instructions say ("git push
+	// gitcote HEAD:main"). They do NOT push to the seed remote directly.
+	runGitSeed(t, repoDir, "fetch", "seed")
+	runGitSeed(t, repoDir, "merge", "seed/main", "-m", "manual resolve of push conflict",
+		"--strategy-option=theirs")
+	runGitSeed(t, repoDir, "push", "origin", "main")
+
+	// handlePostReceive → reconcileExternalSeedSync fires synchronously
+	// within the HTTP handler's post-receive hook in this test setup
+	// (handlePostReceive is called directly, not via a goroutine dispatch
+	// beyond what git.NewHandler already does), but allow a brief window
+	// for the push-delivery attempt (network/disk I/O against the seed
+	// bare repo) to complete.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		cfgNow, _ := git.LoadSeedConfig(projPath)
+		if cfgNow.SyncStatus != nil && cfgNow.SyncStatus.State == "idle" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cfgFinal, _ := git.LoadSeedConfig(projPath)
+	if cfgFinal.SyncStatus == nil || cfgFinal.SyncStatus.State != "idle" {
+		state := "nil"
+		if cfgFinal.SyncStatus != nil {
+			state = cfgFinal.SyncStatus.State
+		}
+		t.Fatalf("expected state=idle after external push resolve + delivery, got %s", state)
+	}
+
+	q, _ := integrityStore.GetPRQueue(ns, proj)
+	if q.ActivePR != 0 {
+		t.Fatalf("expected queue idle after external push resolve, got ActivePR=%d", q.ActivePR)
+	}
+
+	// The critical assertion: the seed bare repo's main ref must actually
+	// advance to gitcote's resolved merge commit — not just a coincidental
+	// content match (the merge favors the seed's own conflicting content,
+	// so a content-only check would pass even if nothing was ever pushed
+	// to the seed remote). Compare commit hashes, not file bytes.
+	resolvedHash := strings.TrimSpace(runGitSeedCapture(t, repoDir, "rev-parse", "main"))
+	verifyDir := filepath.Join(t.TempDir(), "verify-seed")
+	runGitSeed(t, t.TempDir(), "clone", seedBareDir, verifyDir)
+	seedHash := strings.TrimSpace(runGitSeedCapture(t, verifyDir, "rev-parse", "main"))
+	if seedHash != resolvedHash {
+		t.Fatalf("seed repo main (%s) does not match gitcote's resolved merge commit (%s) — "+
+			"the resolution was never actually pushed to the seed remote", seedHash, resolvedHash)
+	}
+	t.Log("PASS: externally-resolved push conflict is not just marked idle — the exact resolved commit is actually delivered to the seed remote")
+
+	if result.TempCloneDir != "" {
+		os.RemoveAll(result.TempCloneDir)
+	}
 }
