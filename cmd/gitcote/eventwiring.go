@@ -256,8 +256,22 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 			if role == "merger" {
 				reattemptMerge(ec, p, ac.DirName, role)
 			}
-			if role == "reviewer" && !resolveAutoConfirm(ec, p.RepoNamespace, p.RepoProject) {
-				return
+			if role == "reviewer" {
+				prStore, serr := getPRStore(ec.gitStore.BaseDir(), p.RepoNamespace, p.RepoProject)
+				if serr == nil {
+					current, gerr := prStore.Get(p.Number)
+					if gerr == nil && current.State == pr.StateOpen {
+						ec.logger.Warn("reviewer exited without verdict", "pr", p.Number, "agent", ac.DirName)
+						markInterrupted(prStore, current, "review_incomplete",
+							"agent exited successfully but did not approve or reject",
+							ac.DirName, role, ec.logger)
+						releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
+						return
+					}
+				}
+				if !resolveAutoConfirm(ec, p.RepoNamespace, p.RepoProject) {
+					return
+				}
 			}
 			releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 			return

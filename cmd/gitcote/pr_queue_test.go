@@ -256,3 +256,54 @@ func TestPRQueue_ReleaseOnInterrupt(t *testing.T) {
 		t.Errorf("PR #1 state = %q, want interrupted", p.State)
 	}
 }
+
+func TestPRQueue_ReviewIncomplete(t *testing.T) {
+	ns, proj := "default", "reviewinc"
+	_, hs, prStore, ec := setupQueueTest(t, ns, proj)
+
+	pr1 := createTestPR(t, prStore, ns, proj, 1, "feat-1")
+	hs.EnqueuePR(ns, proj, 1)
+
+	createTestPR(t, prStore, ns, proj, 2, "feat-2")
+	hs.EnqueuePR(ns, proj, 2)
+
+	// Simulate reviewer exiting 0 without calling approve/reject:
+	// PR is still open → detect and mark interrupted with review_incomplete
+	current, err := prStore.Get(pr1.Number)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.State != pr.StateOpen {
+		t.Fatalf("PR #1 state = %q, want open", current.State)
+	}
+
+	markInterrupted(prStore, current, "review_incomplete",
+		"agent exited successfully but did not approve or reject",
+		"test-agent", "reviewer", ec.logger)
+	releasePRSlotAndDequeue(ec, ns, proj, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	// Queue should advance
+	q, _ := hs.GetPRQueue(ns, proj)
+	if q.ActivePR != 2 {
+		t.Errorf("after review_incomplete #1: active = %d, want 2", q.ActivePR)
+	}
+	if len(q.Waiting) != 0 {
+		t.Errorf("after review_incomplete #1: waiting = %v, want []", q.Waiting)
+	}
+
+	// PR #1 should be interrupted with review_incomplete reason
+	p, _ := prStore.Get(1)
+	if p.State != pr.StateInterrupted {
+		t.Errorf("PR #1 state = %q, want interrupted", p.State)
+	}
+	if p.InterruptInfo == nil {
+		t.Fatal("PR #1 interrupt_info is nil")
+	}
+	if p.InterruptInfo.Reason != "review_incomplete" {
+		t.Errorf("PR #1 interrupt reason = %q, want review_incomplete", p.InterruptInfo.Reason)
+	}
+	if p.PreviousState != pr.StateOpen {
+		t.Errorf("PR #1 previous_state = %q, want open", p.PreviousState)
+	}
+}
