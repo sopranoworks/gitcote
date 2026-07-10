@@ -769,6 +769,212 @@ func extractText(result *mcp.CallToolResult) string {
 	return ""
 }
 
+func TestReviewIncomplete_RetryViaMCP(t *testing.T) {
+	ns, proj := "default", "retryinc"
+	_, _, prStore, ec := setup2StageTest(t, ns, proj)
+
+	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-retry")
+
+	// Simulate review_incomplete interrupt
+	markInterrupted(prStore, pr1, "review_incomplete",
+		"agent exited successfully but did not approve or reject",
+		"default_claude_reviewer", "reviewer", ec.logger)
+
+	p, _ := prStore.Get(1)
+	if p.State != pr.StateInterrupted {
+		t.Fatalf("state = %q, want interrupted", p.State)
+	}
+
+	// Set up MCP server and call retry_pr_agent
+	mcpServer := mcp.NewServer(
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"},
+		nil,
+	)
+	registerPRTools(mcpServer, ec.gitStore, &seedContext{gitStore: ec.gitStore}, ec)
+
+	authenticator := auth.New(auth.Config{
+		ValidateToken: func(tok string) (auth.Principal, auth.RejectReason, bool) {
+			return auth.Principal{Name: "admin", Email: "a@t.com", Scope: "*"}, "", true
+		},
+	})
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return mcpServer },
+		nil,
+	)
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", authenticator.Middleware(mcpHandler))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{Name: "test-client", Version: "1.0"}, nil)
+	ctx := context.Background()
+	session, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:             ts.URL + "/mcp",
+		HTTPClient:           &http.Client{Transport: &bearerTransport{token: "t"}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "retry_pr_agent",
+		Arguments: map[string]any{
+			"namespace":    ns,
+			"project_name": proj,
+			"number":       float64(1),
+		},
+	})
+	if err != nil {
+		t.Fatalf("retry_pr_agent: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("retry_pr_agent returned error: %s", extractText(result))
+	}
+
+	// Immediately after retry, PR should be restored to open
+	retried, _ := prStore.Get(1)
+	if retried.State != pr.StateOpen {
+		t.Fatalf("after retry: state = %q, want open", retried.State)
+	}
+	if retried.InterruptInfo != nil {
+		t.Fatal("after retry: interrupt_info should be nil")
+	}
+	if retried.PreviousState != "" {
+		t.Fatalf("after retry: previous_state = %q, want empty", retried.PreviousState)
+	}
+
+	// Verify the MCP response confirms the retry
+	text := extractText(result)
+	if !strings.Contains(text, "re-spawned") {
+		t.Fatalf("retry response missing 're-spawned': %s", text)
+	}
+	t.Log("PASS: retry review_incomplete → state restored to open, agent re-spawn initiated")
+}
+
+func TestReviewIncomplete_DismissViaMCP(t *testing.T) {
+	ns, proj := "default", "dismissinc"
+	_, _, prStore, ec := setup2StageTest(t, ns, proj)
+
+	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-dismiss")
+
+	// Simulate review_incomplete interrupt
+	markInterrupted(prStore, pr1, "review_incomplete",
+		"agent exited successfully but did not approve or reject",
+		"default_claude_reviewer", "reviewer", ec.logger)
+
+	p, _ := prStore.Get(1)
+	if p.State != pr.StateInterrupted {
+		t.Fatalf("state = %q, want interrupted", p.State)
+	}
+
+	// Set up MCP and call dismiss_pr_interrupt
+	mcpServer := mcp.NewServer(
+		&mcp.Implementation{Name: "gitcote-test", Version: "0.0.0-test"},
+		nil,
+	)
+	registerPRTools(mcpServer, ec.gitStore, &seedContext{gitStore: ec.gitStore}, ec)
+
+	authenticator := auth.New(auth.Config{
+		ValidateToken: func(tok string) (auth.Principal, auth.RejectReason, bool) {
+			return auth.Principal{Name: "admin", Email: "a@t.com", Scope: "*"}, "", true
+		},
+	})
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return mcpServer },
+		nil,
+	)
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", authenticator.Middleware(mcpHandler))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	mcpClient := mcp.NewClient(
+		&mcp.Implementation{Name: "test-client", Version: "1.0"}, nil)
+	ctx := context.Background()
+	session, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint:             ts.URL + "/mcp",
+		HTTPClient:           &http.Client{Transport: &bearerTransport{token: "t"}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "dismiss_pr_interrupt",
+		Arguments: map[string]any{
+			"namespace":    ns,
+			"project_name": proj,
+			"number":       float64(1),
+		},
+	})
+	if err != nil {
+		t.Fatalf("dismiss_pr_interrupt: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("dismiss_pr_interrupt returned error: %s", extractText(result))
+	}
+
+	// After dismiss, PR should be back to open with no interrupt info
+	dismissed, _ := prStore.Get(1)
+	if dismissed.State != pr.StateOpen {
+		t.Fatalf("after dismiss: state = %q, want open", dismissed.State)
+	}
+	if dismissed.InterruptInfo != nil {
+		t.Fatal("after dismiss: interrupt_info should be nil")
+	}
+	if dismissed.PreviousState != "" {
+		t.Fatalf("after dismiss: previous_state = %q, want empty", dismissed.PreviousState)
+	}
+	t.Log("PASS: dismiss review_incomplete → open, no interrupt info, coherent state")
+}
+
+func TestReviewIncomplete_RepeatedInterrupt(t *testing.T) {
+	ns, proj := "default", "repeatinc"
+	_, _, prStore, ec := setup2StageTest(t, ns, proj)
+
+	pr1 := create2StagePR(t, prStore, ns, proj, 1, "feat-repeat")
+
+	for cycle := 1; cycle <= 3; cycle++ {
+		// Mark interrupted with review_incomplete
+		current, _ := prStore.Get(pr1.Number)
+		markInterrupted(prStore, current, "review_incomplete",
+			"agent exited successfully but did not approve or reject",
+			"default_claude_reviewer", "reviewer", ec.logger)
+
+		p, _ := prStore.Get(1)
+		if p.State != pr.StateInterrupted {
+			t.Fatalf("cycle %d: state = %q, want interrupted", cycle, p.State)
+		}
+		if p.InterruptInfo == nil {
+			t.Fatalf("cycle %d: interrupt_info is nil", cycle)
+		}
+		if p.InterruptInfo.Reason != "review_incomplete" {
+			t.Fatalf("cycle %d: reason = %q, want review_incomplete", cycle, p.InterruptInfo.Reason)
+		}
+		if p.PreviousState != pr.StateOpen {
+			t.Fatalf("cycle %d: previous_state = %q, want open", cycle, p.PreviousState)
+		}
+
+		// Simulate retry: restore state (what retry_pr_agent does)
+		p.State = p.PreviousState
+		p.PreviousState = ""
+		p.InterruptInfo = nil
+		p.UpdatedAt = time.Now()
+		if err := prStore.Update(p); err != nil {
+			t.Fatal(err)
+		}
+
+		restored, _ := prStore.Get(1)
+		if restored.State != pr.StateOpen {
+			t.Fatalf("cycle %d after restore: state = %q, want open", cycle, restored.State)
+		}
+	}
+	t.Log("PASS: 3 cycles of review_incomplete → retry → review_incomplete with no stale state")
+}
+
 func runGit2Stage(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
