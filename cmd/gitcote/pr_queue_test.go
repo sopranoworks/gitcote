@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -391,5 +393,118 @@ func TestPRQueue_DismissReleasesSlot(t *testing.T) {
 	dismissed, _ := prStore.Get(1)
 	if dismissed.State != pr.StateOpen {
 		t.Errorf("dismissed PR state = %q, want open", dismissed.State)
+	}
+}
+
+func TestNotifyInterrupt_FiresWhenEnabled(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	ec := &eventContext{
+		logger:     logger,
+		gitcoteURL: "http://localhost:9090",
+	}
+
+	p := &pr.PullRequest{
+		Number:        1,
+		RepoNamespace: "testns",
+		RepoProject:   "testproj",
+		Title:         "Add feature X",
+	}
+
+	notifyInterrupt(ec, "log", p, "review_incomplete",
+		"agent exited successfully but did not approve or reject",
+		"default_claude_reviewer", "reviewer")
+
+	output := buf.String()
+	for _, want := range []string{
+		"PR notification",
+		"review_incomplete",
+		"agent exited successfully",
+		"default_claude_reviewer",
+		"reviewer",
+		"testns",
+		"testproj",
+		"Add feature X",
+		"http://localhost:9090/p/testns/testproj/prs?pr=1",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("notification log missing %q\nGot: %s", want, output)
+		}
+	}
+}
+
+func TestNotifyInterrupt_SkippedWhenDisabled(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	ec := &eventContext{logger: logger}
+
+	p := &pr.PullRequest{
+		Number:        1,
+		RepoNamespace: "ns",
+		RepoProject:   "proj",
+	}
+
+	action := integrity.ResolvedEventAction{NotifyEnabled: false, NotifyMethod: "log"}
+
+	// Simulate the guard used at each interrupt site
+	if action.NotifyEnabled {
+		notifyInterrupt(ec, action.NotifyMethod, p, "review_incomplete", "detail", "agent", "reviewer")
+	}
+
+	if buf.Len() > 0 {
+		t.Errorf("expected no notification when disabled, got: %s", buf.String())
+	}
+}
+
+func TestNotifyInterrupt_AllReasons(t *testing.T) {
+	reasons := []struct {
+		reason string
+		detail string
+	}{
+		{"agent_spawn_failed", "exit code 1"},
+		{"agent_spawn_failed", "no agent config found for role: reviewer"},
+		{"agent_spawn_failed", "scan configs: no such directory"},
+		{"review_incomplete", "agent exited successfully but did not approve or reject"},
+		{"agent_spawn_failed", "hard_timeout"},
+		{"agent_spawn_failed", "no MCP activity for 5m0s"},
+	}
+
+	for _, tc := range reasons {
+		t.Run(tc.reason+"_"+tc.detail[:min(20, len(tc.detail))], func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, nil))
+			ec := &eventContext{logger: logger}
+			p := &pr.PullRequest{
+				Number:        42,
+				RepoNamespace: "ns",
+				RepoProject:   "proj",
+				Title:         "Test PR",
+			}
+
+			notifyInterrupt(ec, "log", p, tc.reason, tc.detail, "test-agent", "reviewer")
+
+			output := buf.String()
+			if !strings.Contains(output, tc.reason) {
+				t.Errorf("missing reason %q in: %s", tc.reason, output)
+			}
+			if !strings.Contains(output, tc.detail) {
+				t.Errorf("missing detail %q in: %s", tc.detail, output)
+			}
+		})
+	}
+}
+
+func TestNotifyInterrupt_NoLinkWithoutURL(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	ec := &eventContext{logger: logger}
+	p := &pr.PullRequest{Number: 1, RepoNamespace: "ns", RepoProject: "proj"}
+
+	notifyInterrupt(ec, "log", p, "review_incomplete", "detail", "agent", "reviewer")
+
+	if strings.Contains(buf.String(), "Link:") {
+		t.Error("should not include Link when gitcoteURL is empty")
 	}
 }

@@ -184,6 +184,27 @@ func notify(method, message string, namespace, project string, prNumber uint32, 
 	}
 }
 
+func notifyInterrupt(ec *eventContext, method string, p *pr.PullRequest, reason, detail, agentName, agentRole string) {
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "[GitCote] PR review interrupted: %s/%s PR #%d", p.RepoNamespace, p.RepoProject, p.Number)
+	fmt.Fprintf(&msg, "\nReason: %s", reason)
+	if detail != "" {
+		fmt.Fprintf(&msg, "\nDetail: %s", detail)
+	}
+	if agentName != "" {
+		fmt.Fprintf(&msg, "\nAgent: %s (%s)", agentName, agentRole)
+	}
+	if p.Title != "" {
+		fmt.Fprintf(&msg, "\nTitle: %s", p.Title)
+	}
+	fmt.Fprintf(&msg, "\nTime: %s", time.Now().Format(time.RFC3339))
+	if ec.gitcoteURL != "" {
+		fmt.Fprintf(&msg, "\nLink: %s/p/%s/%s/prs?pr=%d",
+			strings.TrimSuffix(ec.gitcoteURL, "/"), p.RepoNamespace, p.RepoProject, p.Number)
+	}
+	notify(method, msg.String(), p.RepoNamespace, p.RepoProject, p.Number, ec.logger)
+}
+
 // markInterrupted transitions a PR to interrupted state.
 func markInterrupted(prStore *pr.Store, p *pr.PullRequest, reason, detail, agentName, agentRole string, logger *slog.Logger) {
 	p.PreviousState = p.State
@@ -211,9 +232,13 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 	configs, err := agent.ScanAgentConfigs(agentsRoot)
 	if err != nil {
 		ec.logger.Error("scan agent configs for PR event", "error", err)
+		detail := fmt.Sprintf("scan configs: %v", err)
 		prStore, serr := getPRStore(ec.gitStore.BaseDir(), p.RepoNamespace, p.RepoProject)
 		if serr == nil {
-			markInterrupted(prStore, p, "agent_spawn_failed", fmt.Sprintf("scan configs: %v", err), action.AgentName, role, ec.logger)
+			markInterrupted(prStore, p, "agent_spawn_failed", detail, action.AgentName, role, ec.logger)
+		}
+		if action.NotifyEnabled {
+			go notifyInterrupt(ec, action.NotifyMethod, p, "agent_spawn_failed", detail, action.AgentName, role)
 		}
 		return
 	}
@@ -230,9 +255,13 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 	}
 	if ac == nil {
 		ec.logger.Warn("no agent config found", "role", role, "agent_name", action.AgentName)
+		detail := "no agent config found for role: " + role
 		prStore, serr := getPRStore(ec.gitStore.BaseDir(), p.RepoNamespace, p.RepoProject)
 		if serr == nil {
-			markInterrupted(prStore, p, "agent_spawn_failed", "no agent config found for role: "+role, action.AgentName, role, ec.logger)
+			markInterrupted(prStore, p, "agent_spawn_failed", detail, action.AgentName, role, ec.logger)
+		}
+		if action.NotifyEnabled {
+			go notifyInterrupt(ec, action.NotifyMethod, p, "agent_spawn_failed", detail, action.AgentName, role)
 		}
 		return
 	}
@@ -260,9 +289,12 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 					current, gerr := prStore.Get(p.Number)
 					if gerr == nil && current.State == pr.StateOpen {
 						ec.logger.Warn("reviewer exited without verdict", "pr", p.Number, "agent", ac.DirName)
+						incDetail := "agent exited successfully but did not approve or reject"
 						markInterrupted(prStore, current, "review_incomplete",
-							"agent exited successfully but did not approve or reject",
-							ac.DirName, role, ec.logger)
+							incDetail, ac.DirName, role, ec.logger)
+						if action.NotifyEnabled {
+							go notifyInterrupt(ec, action.NotifyMethod, p, "review_incomplete", incDetail, ac.DirName, role)
+						}
 						return
 					}
 				}
@@ -292,6 +324,9 @@ func spawnAgentForPR(ec *eventContext, action integrity.ResolvedEventAction, p *
 		prStore, serr := getPRStore(ec.gitStore.BaseDir(), p.RepoNamespace, p.RepoProject)
 		if serr == nil {
 			markInterrupted(prStore, p, "agent_spawn_failed", detail, ac.DirName, role, ec.logger)
+		}
+		if action.NotifyEnabled {
+			go notifyInterrupt(ec, action.NotifyMethod, p, "agent_spawn_failed", detail, ac.DirName, role)
 		}
 	}
 }
