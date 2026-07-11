@@ -575,18 +575,46 @@ func handleSeedSyncRetryWS(c *uiws.Client, sc *seedContext, ec *eventContext, pa
 		return
 	}
 
+	direction := seedSyncRetryDirection(sc.gitStore, p.Namespace, p.ProjectName)
+
 	ensureNoActiveToken(ec, p.Namespace, p.ProjectName, 0)
 	releaseSeedSyncSlot(ec, p.Namespace, p.ProjectName)
 	updateSeedSyncState(sc.gitStore, p.Namespace, p.ProjectName, "retrying")
 
 	go func() {
-		executeSeedPull(sc, ec, p.Namespace, p.ProjectName, "")
+		if direction == "push" {
+			_ = executeSeedPush(sc, ec, p.Namespace, p.ProjectName, "")
+		} else {
+			executeSeedPull(sc, ec, p.Namespace, p.ProjectName, "")
+		}
 	}()
 
 	c.SendResponse(MsgSeedSyncRetry, map[string]string{
 		"status":  "ok",
-		"message": "seed sync retried, queue slot released and pull re-triggered",
+		"message": fmt.Sprintf("seed sync retried, queue slot released and %s re-triggered", direction),
 	})
+}
+
+// seedSyncRetryDirection reports which flow ("push" or "pull") a stuck seed
+// sync was last in, so retry can resume the same operation instead of
+// unconditionally re-running a pull. Without this, a merge conflict raised
+// by push_to_seed (Direction="push", set by executeSeedPushWithMerge) would
+// have retry_seed_sync silently retry a pull instead — the wrong operation,
+// and not even the one an operator who just configured a merger for
+// OnMergeConflict/on_push_conflict would expect. Defaults to "pull" to
+// preserve existing behavior when no direction was ever recorded (e.g. a
+// stuck state predating this field, or one set directly by an interrupted
+// agent-spawn failure path that doesn't tag a direction).
+func seedSyncRetryDirection(gitStore *git.Store, ns, proj string) string {
+	projPath, err := gitStore.ProjectPath(ns, proj)
+	if err != nil {
+		return "pull"
+	}
+	cfg, err := git.LoadSeedConfig(projPath)
+	if err != nil || cfg.SyncStatus == nil || cfg.SyncStatus.Direction != "push" {
+		return "pull"
+	}
+	return "push"
 }
 
 func handleSeedSyncDismissWS(c *uiws.Client, sc *seedContext, ec *eventContext, payload json.RawMessage) {
@@ -858,7 +886,7 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "retry_seed_sync",
-		Description: "Release the queue slot held by a stuck/interrupted seed sync and re-trigger the pull. Admin only.",
+		Description: "Release the queue slot held by a stuck/interrupted seed sync and re-trigger whichever flow (pull or push) was last in conflict/interrupted. Admin only.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in retrySeedSyncInput) (*mcp.CallToolResult, retrySeedSyncOutput, error) {
 		principal, hasPrincipal := auth.PrincipalFrom(ctx)
 		if hasPrincipal {
@@ -875,16 +903,22 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 			return nil, retrySeedSyncOutput{}, fmt.Errorf("seed sync is not the active queue entry for %s/%s", in.Namespace, in.ProjectName)
 		}
 
+		direction := seedSyncRetryDirection(gitStore, in.Namespace, in.ProjectName)
+
 		ensureNoActiveToken(ec, in.Namespace, in.ProjectName, 0)
 		releaseSeedSyncSlot(ec, in.Namespace, in.ProjectName)
 		updateSeedSyncState(gitStore, in.Namespace, in.ProjectName, "retrying")
 
 		sc := &seedContext{gitStore: gitStore, vault: v, gitcoteURL: gitcoteURL}
 		go func() {
-			executeSeedPull(sc, ec, in.Namespace, in.ProjectName, "")
+			if direction == "push" {
+				_ = executeSeedPush(sc, ec, in.Namespace, in.ProjectName, "")
+			} else {
+				executeSeedPull(sc, ec, in.Namespace, in.ProjectName, "")
+			}
 		}()
 
-		return nil, retrySeedSyncOutput{Message: "seed sync retried, queue slot released and pull re-triggered"}, nil
+		return nil, retrySeedSyncOutput{Message: fmt.Sprintf("seed sync retried, queue slot released and %s re-triggered", direction)}, nil
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{

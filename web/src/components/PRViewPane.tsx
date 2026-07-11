@@ -82,17 +82,20 @@ git push`}
   )
 }
 
-// RetryPanel covers two recoverable cases with the same Retry button and
+// RetryPanel covers three recoverable cases with the same Retry button and
 // the same retry_pr_agent action, matching the backend's prRetryEligible:
 // a PR that was interrupted (agent ran, failed to reach a terminal
-// outcome), and a PR that's open but never had an agent spawned at all
-// (e.g. no reviewer was configured when it arrived). The interrupt-specific
-// UI (reason/detail/agent info, Dismiss) only applies to the former.
+// outcome), an open PR that never had a reviewer spawned at all (e.g. no
+// reviewer was configured when it arrived), and a merge-conflict PR that
+// never had a merger spawned at all (e.g. no merger was configured when
+// the conflict occurred). The interrupt-specific UI (reason/detail/agent
+// info, Dismiss) only applies to the interrupted case.
 function RetryPanel({
   namespace,
   project,
   number,
   interrupted,
+  state,
   info,
   onRefresh,
 }: {
@@ -100,6 +103,7 @@ function RetryPanel({
   project: string
   number: number
   interrupted: boolean
+  state: string
   info?: { reason: string; detail: string; agent_name: string; agent_role: string; at: string }
   onRefresh: () => void
 }) {
@@ -134,7 +138,8 @@ function RetryPanel({
     }
   }
 
-  const retryLabel = interrupted ? 'Retry' : 'Start review'
+  const neverAttemptedRole = state === 'merge_conflict' ? 'merger' : 'reviewer'
+  const retryLabel = interrupted ? 'Retry' : neverAttemptedRole === 'merger' ? 'Start merge' : 'Start review'
 
   return (
     <div className={styles.interruptPanel} data-testid={interrupted ? 'interrupted-panel' : 'retry-eligible-panel'}>
@@ -166,7 +171,7 @@ function RetryPanel({
         </button>
         {switchAgent && (
           <>
-            <AgentSelector role={info?.agent_role ?? 'reviewer'} value={selectedAgent} onChange={setSelectedAgent} />
+            <AgentSelector role={info?.agent_role ?? neverAttemptedRole} value={selectedAgent} onChange={setSelectedAgent} />
             <button className={styles.actionBtn} disabled={busy || !selectedAgent} onClick={() => void handleRetry(selectedAgent)}>
               Retry with selected
             </button>
@@ -352,13 +357,15 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
         </div>
       )}
 
-      {(pr.state === 'interrupted' || (pr.state === 'open' && data.retry_eligible)) && (
+      {(pr.state === 'interrupted' ||
+        ((pr.state === 'open' || pr.state === 'merge_conflict') && data.retry_eligible)) && (
         <div className={styles.section}>
           <RetryPanel
             namespace={namespace}
             project={project}
             number={number}
             interrupted={pr.state === 'interrupted'}
+            state={pr.state}
             info={pr.interrupt_info}
             onRefresh={handleRefresh}
           />

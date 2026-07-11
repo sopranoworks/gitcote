@@ -417,8 +417,12 @@ func authorizePR(ctx context.Context, namespace, project string, level authz.Lev
 // handler) may spawn an agent for this PR. Two cases are allowed:
 //  1. StateInterrupted — the established recovery path: an agent was
 //     spawned, failed to reach a terminal outcome, and is being retried.
-//  2. StateOpen with no agent ever spawned — e.g. no reviewer agent was
-//     configured in the project when the PR arrived (or was dequeued).
+//  2. StateOpen or StateMergeConflict with no agent ever spawned — e.g.
+//     no reviewer agent was configured when the PR arrived (StateOpen),
+//     or no merger agent was configured when a merge conflict occurred
+//     (StateMergeConflict) — onPRMergeConflict/onSeedPushConflict-style
+//     spawn gating leaves the PR sitting in StateMergeConflict forever
+//     with no InterruptInfo if AgentEnabled was false at conflict time.
 //     Restricted to the PR that is currently the active queue entry (so
 //     spawning can't jump the FIFO order) and to PRs with no live agent
 //     token on record (so this can't double-spawn over an agent that's
@@ -427,21 +431,36 @@ func prRetryEligible(ec *eventContext, p *pr.PullRequest) (bool, string) {
 	if p.State == pr.StateInterrupted {
 		return true, ""
 	}
-	if p.State != pr.StateOpen {
-		return false, fmt.Sprintf("PR #%d is in state %q — must be interrupted, or open with no prior agent attempt", p.Number, p.State)
+	if p.State != pr.StateOpen && p.State != pr.StateMergeConflict {
+		return false, fmt.Sprintf("PR #%d is in state %q — must be interrupted, or open/merge-conflict with no prior agent attempt", p.Number, p.State)
 	}
 	if ec == nil || ec.integrityHS == nil {
 		return false, "integrity store not available"
 	}
 	q, err := ec.integrityHS.GetPRQueue(p.RepoNamespace, p.RepoProject)
 	if err != nil || q.ActivePR != int(p.Number) {
-		return false, fmt.Sprintf("PR #%d is open but not the active queue entry — cannot spawn out of turn", p.Number)
+		return false, fmt.Sprintf("PR #%d is %s but not the active queue entry — cannot spawn out of turn", p.Number, p.State)
 	}
 	key := agentTokenKey(p.RepoNamespace, p.RepoProject, int(p.Number))
 	if tok, terr := ec.integrityHS.GetAgentToken(key); terr == nil && tok != nil {
 		return false, fmt.Sprintf("PR #%d already has an agent running", p.Number)
 	}
 	return true, ""
+}
+
+// defaultRetryRole picks the agent role for a never-attempted retry (no
+// InterruptInfo to read a role from) based on the PR's current state —
+// StateMergeConflict needs a merger, everything else (StateOpen) needs a
+// reviewer. Without this, retry_pr_agent/handlePRRetryAgent defaulted
+// unconditionally to "reviewer", which was harmless while retry only
+// covered StateOpen but silently resolved the wrong role (and thus the
+// wrong OnMergeConflict/OnCreated config) once eligibility was extended
+// to never-attempted StateMergeConflict PRs.
+func defaultRetryRole(p *pr.PullRequest) string {
+	if p.State == pr.StateMergeConflict {
+		return "merger"
+	}
+	return "reviewer"
 }
 
 // registerPRTools registers the PR MCP tools.
@@ -749,7 +768,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "retry_pr_agent",
-		Description: "Spawn/re-spawn a reviewer/coder/merger agent for a PR, using whichever agent config is currently resolved for the project — never overrides an explicit AgentEnabled=false. Works on StateInterrupted PRs (clears interrupted state, restores previous status, then re-spawns) and on StateOpen PRs that never had an agent spawned — e.g. no reviewer agent was configured when the PR arrived. This is the single unified action for both cases (formerly also exposed separately as PR_REVIEW/\"Review\"). Admin only.",
+		Description: "Spawn/re-spawn a reviewer/coder/merger agent for a PR, using whichever agent config is currently resolved for the project — never overrides an explicit AgentEnabled=false. Works on StateInterrupted PRs (clears interrupted state, restores previous status, then re-spawns) and on StateOpen or StateMergeConflict PRs that never had an agent spawned — e.g. no reviewer agent was configured when the PR arrived, or no merger agent was configured when a merge conflict occurred. This is the single unified action for all these cases (formerly also exposed separately as PR_REVIEW/\"Review\"). Admin only.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in retryPRAgentInput) (*mcp.CallToolResult, retryPRAgentOutput, error) {
 		principal, hasPrincipal := auth.PrincipalFrom(ctx)
 		if hasPrincipal {
@@ -784,7 +803,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 			role = interruptInfo.AgentRole
 		}
 		if role == "" {
-			role = "reviewer"
+			role = defaultRetryRole(p)
 		}
 
 		global, _ := ec.integrityHS.GetGlobalPREventSettings()
@@ -1450,7 +1469,7 @@ func handlePRRetryAgent(c *uiws.Client, gitStore *git.Store, ec *eventContext, p
 		role = interruptInfo.AgentRole
 	}
 	if role == "" {
-		role = "reviewer"
+		role = defaultRetryRole(pullReq)
 	}
 
 	global, _ := ec.integrityHS.GetGlobalPREventSettings()
