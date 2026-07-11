@@ -34,9 +34,13 @@ type Handler struct {
 	PreReceive func(namespace, project string, principal auth.Principal, refUpdates []RefUpdate) error
 
 	// PostReceive is called after a successful receive-pack (push). It receives
-	// the namespace, project, principal, and any push options extracted from the
-	// protocol stream (e.g. "pull_request.create", "pull_request.target=main").
-	PostReceive func(namespace, project string, principal auth.Principal, pushOpts []string)
+	// the namespace, project, principal, any push options extracted from the
+	// protocol stream (e.g. "pull_request.create", "pull_request.target=main"),
+	// and the ref updates actually requested by this push (same data as
+	// PreReceive's refUpdates) — the authoritative source for which branch was
+	// just pushed, in preference to any heuristic guess from the current repo
+	// state.
+	PostReceive func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []RefUpdate)
 
 	// ProtectStorer wraps a storer with branch protection for receive-pack.
 	// Called after PreReceive passes but before go-git processes the packfile.
@@ -104,9 +108,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// For receive-pack POST, extract push options and ref updates from the
 	// protocol stream before delegating to the backend.
 	var pushOpts []string
+	var refUpdates []RefUpdate
 	isReceivePack := len(parts) >= 3 && parts[2] == "git-receive-pack" && r.Method == http.MethodPost
 	if isReceivePack {
-		opts, refUpdates, newBody, err := ExtractReceivePackInfo(r.Body)
+		opts, updates, newBody, err := ExtractReceivePackInfo(r.Body)
 		if err != nil {
 			h.logger.Error("receive-pack info extraction failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -114,6 +119,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		r.Body = newBody
 		pushOpts = opts
+		refUpdates = updates
 
 		if h.PreReceive != nil {
 			principal, _ := auth.PrincipalFrom(r.Context())
@@ -164,7 +170,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Post-receive hook: fire after a receive-pack POST completes.
 	if isReceivePack && h.PostReceive != nil {
 		principal, _ := auth.PrincipalFrom(r.Context())
-		h.PostReceive(namespace, project, principal, pushOpts)
+		h.PostReceive(namespace, project, principal, pushOpts, refUpdates)
 	}
 }
 

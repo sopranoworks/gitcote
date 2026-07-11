@@ -427,7 +427,7 @@ func TestBranchProtection_PRPushOptions(t *testing.T) {
 			Allowed: git.AllowedBranchesFromExtra(principal.ExtraPermissions),
 		}
 	}
-	handler.PostReceive = func(ns, proj string, p auth.Principal, pushOpts []string) {
+	handler.PostReceive = func(ns, proj string, p auth.Principal, pushOpts []string, refUpdates []git.RefUpdate) {
 		capturedPushOpts = pushOpts
 	}
 

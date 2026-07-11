@@ -34,8 +34,12 @@ type Server struct {
 	config   *gossh.ServerConfig
 	logger   *slog.Logger
 
-	// PostReceive is called after a successful receive-pack push.
-	PostReceive func(namespace, project string, principal auth.Principal, pushOpts []string)
+	// PostReceive is called after a successful receive-pack push. refUpdates
+	// carries the ref(s) actually touched by this push, recorded via
+	// ProtectedStorer.SetReference (SSH has no pkt-line pre-parse like the
+	// HTTP transport, so this is the only reliable source for "which branch
+	// was just pushed").
+	PostReceive func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate)
 }
 
 func NewServer(store *git.Store, keyStore *sshkeys.Store, hostKeyPath string, logger *slog.Logger) (*Server, error) {
@@ -224,8 +228,11 @@ func (s *Server) handleReceivePack(ctx context.Context, ch gossh.Channel, st *fi
 
 	// Wrap the storer with branch protection. go-git handles the full protocol;
 	// ref updates are intercepted at the storer level and rejected if they
-	// violate branch protection or allowed_branches restrictions.
+	// violate branch protection or allowed_branches restrictions. The same
+	// wrapper also records which refs were actually touched, since SSH has
+	// no pkt-line pre-parse to get that from otherwise.
 	var protSt storage.Storer = st
+	var protectedSt *git.ProtectedStorer
 	{
 		repo, err := s.store.OpenRepo(namespace, project)
 		if err != nil {
@@ -235,12 +242,13 @@ func (s *Server) handleReceivePack(ctx context.Context, ch gossh.Channel, st *fi
 		}
 		effectiveLevel := git.EffectiveGitLevel(principal.Scope, namespace, project)
 		allowedBranches := git.AllowedBranchesFromExtra(principal.ExtraPermissions)
-		protSt = &git.ProtectedStorer{
+		protectedSt = &git.ProtectedStorer{
 			Storer:  st,
 			Repo:    repo,
 			Level:   effectiveLevel,
 			Allowed: allowedBranches,
 		}
+		protSt = protectedSt
 	}
 
 	if err := transport.ReceivePack(ctx, protSt, reader, writer, &transport.ReceivePackRequest{}); err != nil {
@@ -249,7 +257,7 @@ func (s *Server) handleReceivePack(ctx context.Context, ch gossh.Channel, st *fi
 	}
 
 	if s.PostReceive != nil {
-		s.PostReceive(namespace, project, principal, envPushOpts)
+		s.PostReceive(namespace, project, principal, envPushOpts, protectedSt.Updates)
 	}
 
 	return 0

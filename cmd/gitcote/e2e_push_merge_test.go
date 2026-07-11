@@ -65,8 +65,8 @@ func TestFullE2E_PushToMerge(t *testing.T) {
 	}
 
 	gitHTTP := git.NewHandler(gitStore, logger)
-	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
-		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, evtCtx)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate) {
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, refUpdates, evtCtx)
 	}
 
 	mcpServer := mcp.NewServer(

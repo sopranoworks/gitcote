@@ -51,7 +51,7 @@ func TestScopeEnforcement(t *testing.T) {
 
 	handlePostReceive(gitStore, testLogger(), ns, proj,
 		auth.Principal{Name: "coder", Email: "coder@test.com"},
-		[]string{"pull_request.create", "pull_request.target=main"}, nil)
+		[]string{"pull_request.create", "pull_request.target=main"}, nil, nil)
 
 	prStore, err := getPRStore(baseDir, ns, proj)
 	if err != nil {

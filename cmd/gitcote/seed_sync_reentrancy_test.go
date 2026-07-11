@@ -697,8 +697,8 @@ func TestSeedSync_ExternalMergeAutoDetected(t *testing.T) {
 
 	// Set up HTTP git server with PostReceive hook.
 	gitHTTP := git.NewHandler(gitStore, logger)
-	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
-		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, ec)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate) {
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, refUpdates, ec)
 	}
 	authenticator := auth.New(auth.Config{
 		ValidateToken: func(tok string) (auth.Principal, auth.RejectReason, bool) {
@@ -1397,8 +1397,8 @@ func TestSeedSync_PushConflictExternalResolveDeliversToSeed(t *testing.T) {
 	}
 
 	gitHTTP := git.NewHandler(gitStore, logger)
-	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
-		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, ec)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate) {
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, refUpdates, ec)
 	}
 	authenticator := auth.New(auth.Config{
 		ValidateToken: func(tok string) (auth.Principal, auth.RejectReason, bool) {

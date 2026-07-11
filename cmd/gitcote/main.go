@@ -258,11 +258,11 @@ func run(cfg *Config, logger *slog.Logger) error {
 			Allowed: allowedBranches,
 		}
 	}
-	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate) {
 		logger.Info("post-receive",
 			"namespace", namespace, "project", project,
 			"principal", principal.Email, "push_options", pushOpts)
-		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, evtCtx)
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, refUpdates, evtCtx)
 	}
 
 	// ---- /ws/ui user/OAuth management (Shoka core handlers, GitCote ws wrapper) ----
@@ -434,11 +434,11 @@ func run(cfg *Config, logger *slog.Logger) error {
 		if serr != nil {
 			return fmt.Errorf("create SSH server: %w", serr)
 		}
-		sshServer.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
+		sshServer.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate) {
 			logger.Info("ssh post-receive",
 				"namespace", namespace, "project", project,
 				"principal", principal.Email, "push_options", pushOpts)
-			handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, evtCtx)
+			handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, refUpdates, evtCtx)
 		}
 		g.Go(func() error {
 			ln, lerr := net.Listen("tcp", cfg.Server.SSH.Listen)

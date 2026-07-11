@@ -59,9 +59,32 @@ func getPRStore(baseDir, namespace, project string) (*pr.Store, error) {
 	return s, nil
 }
 
+// resolvePushedSourceBranch returns the branch actually touched by this
+// push, per refUpdates (the authoritative ref-update list from the
+// post-receive hook — the real pkt-line command list for HTTP, or recorded
+// ProtectedStorer.SetReference calls for SSH), preferring the first
+// non-target branch that isn't a deletion. Returns "" if refUpdates doesn't
+// identify one (not available, or only the target branch / deletions were
+// touched), signaling the caller to fall back to a best-effort guess.
+func resolvePushedSourceBranch(refUpdates []git.RefUpdate, target string) string {
+	for _, u := range refUpdates {
+		name := plumbing.ReferenceName(u.RefName)
+		if !name.IsBranch() {
+			continue
+		}
+		if u.NewHash == plumbing.ZeroHash {
+			continue // deletion
+		}
+		if branch := name.Short(); branch != target {
+			return branch
+		}
+	}
+	return ""
+}
+
 // handlePostReceive processes push options after a successful receive-pack.
 // If "pull_request.create" is present, creates or updates a PR.
-func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project string, principal auth.Principal, pushOpts []string, ec *eventContext) {
+func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate, ec *eventContext) {
 	opts := parsePushOpts(pushOpts)
 	createPR := false
 	target := ""
@@ -119,14 +142,27 @@ func handlePostReceive(store *git.Store, logger *slog.Logger, namespace, project
 		}
 		target = resolved
 	}
-	branches, err := git.ListBranches(repo)
-	if err != nil {
-		logger.Error("list branches for PR creation", "error", err)
-		return
-	}
-	for _, b := range branches {
-		if b != target && sourceBranch == "" {
-			sourceBranch = b
+	// Prefer the branch actually declared by this push's ref updates — the
+	// authoritative source — over guessing from current repo state. Guessing
+	// via git.ListBranches("first non-target branch") is unreliable once
+	// more than one non-target branch exists in the repo (its iteration
+	// order depends on whether refs are loose or packed, not on push
+	// recency — see gitcote/development report
+	// 2026-07-11-fix-source-branch-resolution-race), and can silently
+	// resolve to an unrelated existing branch instead of the one just
+	// pushed. Only fall back to the guess when refUpdates doesn't identify
+	// a candidate (e.g. not available from this call site).
+	sourceBranch = resolvePushedSourceBranch(refUpdates, target)
+	if sourceBranch == "" {
+		branches, err := git.ListBranches(repo)
+		if err != nil {
+			logger.Error("list branches for PR creation", "error", err)
+			return
+		}
+		for _, b := range branches {
+			if b != target && sourceBranch == "" {
+				sourceBranch = b
+			}
 		}
 	}
 

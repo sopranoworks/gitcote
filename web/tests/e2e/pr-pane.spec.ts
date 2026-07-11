@@ -132,7 +132,10 @@ test.describe('PR Pane', () => {
 
     const sidebar = page.locator('#sidebar')
     await expect(sidebar).toBeVisible({ timeout: 5000 })
-    await expect(sidebar.getByText('#')).toBeVisible({ timeout: 5000 })
+    // beforeAll creates 3 distinct PRs (feat/auth, feat/search, fix/typo),
+    // so more than one "#N" entry is expected here — just confirm at least
+    // one is visible rather than requiring an exact single match.
+    await expect(sidebar.getByText('#').first()).toBeVisible({ timeout: 5000 })
 
     await page.screenshot({ path: 'test-results/pr-pane-tree-view.png', fullPage: false })
   })
@@ -143,7 +146,7 @@ test.describe('PR Pane', () => {
     await page.waitForTimeout(2000)
 
     const sidebar = page.locator('#sidebar')
-    await expect(sidebar.getByText('#')).toBeVisible({ timeout: 5000 })
+    await expect(sidebar.getByText('#').first()).toBeVisible({ timeout: 5000 })
 
     await sidebar.getByText('Add authentication').click()
     await page.waitForTimeout(1000)

@@ -62,6 +62,7 @@ func TestCorrectPath_PushToPRToReviewToApprove(t *testing.T) {
 		auth.Principal{Name: "coder", Email: "coder@test.com"},
 		[]string{"pull_request.create", "pull_request.target=main"},
 		nil,
+		nil,
 	)
 
 	prStore, err := getPRStore(baseDir, ns, proj)

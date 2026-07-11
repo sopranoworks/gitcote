@@ -209,8 +209,8 @@ func TestOperatorConfirmMerge(t *testing.T) {
 	}
 
 	gitHTTP := git.NewHandler(gitStore, logger)
-	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
-		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, ec)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate) {
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, refUpdates, ec)
 	}
 
 	mcpServer := mcp.NewServer(
@@ -591,8 +591,8 @@ func TestFullE2E_2StageReview(t *testing.T) {
 	}
 
 	gitHTTP := git.NewHandler(gitStore, logger)
-	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
-		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, ec)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate) {
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, refUpdates, ec)
 	}
 
 	mcpServer := mcp.NewServer(
@@ -1278,8 +1278,8 @@ func TestManualRecovery_ExternalMergeDetected(t *testing.T) {
 	}
 
 	gitHTTP := git.NewHandler(gitStore, logger)
-	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string) {
-		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, ec)
+	gitHTTP.PostReceive = func(namespace, project string, principal auth.Principal, pushOpts []string, refUpdates []git.RefUpdate) {
+		handlePostReceive(gitStore, logger, namespace, project, principal, pushOpts, refUpdates, ec)
 	}
 
 	authenticator := auth.New(auth.Config{

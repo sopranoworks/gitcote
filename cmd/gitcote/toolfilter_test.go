@@ -55,7 +55,7 @@ func setupToolFilterTest(t *testing.T) (plainTS, oauthTS *httptest.Server) {
 
 	handlePostReceive(gitStore, testLogger(), ns, proj,
 		auth.Principal{Name: "coder", Email: "coder@test.com"},
-		[]string{"pull_request.create", "pull_request.target=main"}, nil)
+		[]string{"pull_request.create", "pull_request.target=main"}, nil, nil)
 
 	v, err := vault.Open(filepath.Join(baseDir, "keys.db"))
 	if err != nil {

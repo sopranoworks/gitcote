@@ -153,6 +153,7 @@ test.describe('Review button race safety (guarded by prRetryEligible)', () => {
     const page = await browser.newPage()
     await ensureAdminLoggedIn(page)
     await ensureProject(page, 'rgv', 'demo')
+    await ensureProject(page, 'rgv2', 'demo')
     token = await issueGitToken(page)
     await page.close()
   })
@@ -161,22 +162,6 @@ test.describe('Review button race safety (guarded by prRetryEligible)', () => {
     await ensureAdminLoggedIn(page)
   })
 
-  // This spec deliberately covers only the single-PR positive control here.
-  // The "hidden for a queued (non-active) PR" property is proven two other
-  // ways instead of a second PR in this same project:
-  //   - retroactive-review.spec.ts's queued-PR test proves it end-to-end
-  //     for the underlying retry_eligible flag (which both the Retry and
-  //     Review buttons gate on — Review additionally requires hasReviewer).
-  //   - TestPRRetryEligible_Cases (Go) proves the shared backend check
-  //     rejects a non-active-queue-entry PR directly.
-  // Deliberately NOT pushing a second PR into the same project here: doing
-  // so exposed a genuine pre-existing bug in handlePostReceive's PR-source-
-  // branch detection (prwiring.go, the git.ListBranches "first non-target
-  // branch" heuristic is not deterministic once 2+ non-target branches
-  // exist) that intermittently attributes the second push to the first
-  // PR's branch instead of creating a second PR — unrelated to this
-  // directive's scope, reported separately, not worth working around here
-  // by deleting refs (which has its own side effects on PR #1's state).
   test('Review button appears for an eligible open PR once a reviewer agent is configured', async ({ page }) => {
     test.setTimeout(60_000)
     const content = page.locator('#content')
@@ -199,5 +184,57 @@ test.describe('Review button race safety (guarded by prRetryEligible)', () => {
     await expect(content.locator('[data-state="open"]')).toBeVisible()
     await expect(content.getByRole('button', { name: 'Review', exact: true })).toBeVisible({ timeout: 5000 })
     await page.screenshot({ path: 'test-results/race-review-visible-active.png', fullPage: false })
+  })
+
+  // Restored from the prior directive, where it was simplified away after
+  // exposing a genuine pre-existing bug in handlePostReceive's PR-source-
+  // branch detection (git.ListBranches' "first non-target branch" guess was
+  // not deterministic once 2+ non-target branches existed, and could
+  // silently update the wrong PR instead of creating a new one — see
+  // gitcote/development report 2026-07-11-fix-source-branch-resolution-race).
+  // Now that handlePostReceive resolves the source branch from the actual
+  // pushed ref instead of guessing, two simultaneously-open PRs on distinct
+  // branches resolve correctly, and this test exercises that end-to-end
+  // through a real two-PR push sequence, not just a single PR.
+  test('Review button does NOT appear for a queued PR even when a reviewer agent is configured (no queue-jumping)', async ({ page }) => {
+    test.setTimeout(120_000)
+    const content = page.locator('#content')
+
+    const repo = cloneAndInit(token, 'rgv2', 'demo')
+    pushPR(repo, 'feat/active', 'Active PR')
+    await waitForPRTitle(page, 'rgv2', 'demo', 1, 'Active PR')
+
+    git(repo, 'checkout', 'main')
+    pushPR(repo, 'feat/queued', 'Queued PR')
+    await waitForPRTitle(page, 'rgv2', 'demo', 2, 'Queued PR')
+
+    // Configure a reviewer agent after both PRs already exist — this only
+    // affects the frontend's hasReviewer flag; it does not retroactively
+    // spawn anything for either existing PR.
+    await setPREventSettings(page, 'rgv2', 'demo', {
+      on_created: { agent_enabled: true, agent_name: 'mock_reviewer' },
+      on_confirmed: { auto_confirm: false },
+    })
+
+    // Positive control: PR #1 is open and the active queue entry, so the
+    // Review button must be visible — proves the gate isn't always-false.
+    await page.goto('/p/rgv2/demo/prs?pr=1')
+    await page.waitForTimeout(1500)
+    await expect(content.getByText('Active PR')).toBeVisible({ timeout: 5000 })
+    await expect(content.locator('[data-state="open"]')).toBeVisible()
+    await expect(content.getByRole('button', { name: 'Review', exact: true })).toBeVisible({ timeout: 5000 })
+    await page.screenshot({ path: 'test-results/race-review-visible-active-two-pr.png', fullPage: false })
+
+    // PR #2 is open too, and a reviewer IS configured (hasReviewer=true),
+    // but it is NOT the active queue entry — the Review button must not
+    // appear, or an operator could spawn a reviewer for it out of FIFO
+    // order.
+    await page.goto('/p/rgv2/demo/prs?pr=2')
+    await page.waitForTimeout(1500)
+    await expect(content.getByText('Queued PR')).toBeVisible({ timeout: 5000 })
+    await expect(content.locator('[data-state="open"]')).toBeVisible()
+    await expect(content.getByRole('button', { name: 'Review', exact: true })).not.toBeVisible()
+    await expect(content.locator('[data-testid="retry-eligible-panel"]')).not.toBeVisible()
+    await page.screenshot({ path: 'test-results/race-review-hidden-queued.png', fullPage: false })
   })
 })
