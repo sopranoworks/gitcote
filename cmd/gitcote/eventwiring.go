@@ -57,6 +57,29 @@ func agentTokenKey(namespace, project string, prNumber int) string {
 	return fmt.Sprintf("%s/%s#%d", namespace, project, prNumber)
 }
 
+// prAgentActive guards against concurrent agent-spawn attempts for the same
+// PR, mirroring the seedPullActive/seedPushActive reentrancy pattern
+// (commit 1f52fe2). Without this, two near-simultaneous retry/review calls
+// for the same PR can both pass prRetryEligible's live-token check before
+// either has actually registered a token — token issuance happens deep
+// inside spawnAgentForPR/executeAgentForPR, well after the eligibility
+// check returns, so the check alone is not enough to prevent a double
+// spawn. Keyed the same way as agent tokens (agentTokenKey), held from the
+// moment a retry/review call passes eligibility until its spawn attempt
+// fully completes.
+var prAgentActive sync.Map // key: agentTokenKey(ns, proj, prNumber) → bool
+
+// acquirePRAgentLock returns true if the caller now holds the lock for key.
+func acquirePRAgentLock(key string) bool {
+	_, loaded := prAgentActive.LoadOrStore(key, true)
+	return !loaded
+}
+
+// releasePRAgentLock releases a lock acquired by acquirePRAgentLock.
+func releasePRAgentLock(key string) {
+	prAgentActive.Delete(key)
+}
+
 func taskTypeForRole(role string) string {
 	switch role {
 	case "reviewer":

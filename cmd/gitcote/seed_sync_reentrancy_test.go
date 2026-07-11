@@ -21,6 +21,27 @@ import (
 	"github.com/sopranoworks/shoka/pkg/oauthstore"
 )
 
+// syncBuffer is a mutex-guarded bytes.Buffer for tests that read log
+// output from the main goroutine while a `go notifySeedSyncInterrupt(...)`
+// call writes to it from a background goroutine — plain bytes.Buffer is
+// not safe for that concurrent use and trips the race detector.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func setupSeedSyncTest(t *testing.T, ns, proj string) (*seedContext, *eventContext, *integrity.Store) {
 	t.Helper()
 	baseDir := t.TempDir()
@@ -1050,7 +1071,7 @@ func TestSeedSync_NotificationFiresOnPushConflict(t *testing.T) {
 	ns, proj := "pnotify", "conflict"
 	sc, ec, hs := setupSeedSyncTest(t, ns, proj)
 
-	var buf bytes.Buffer
+	var buf syncBuffer
 	ec.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ec.gitcoteURL = "https://gitcote.example.com"
 
@@ -1113,7 +1134,7 @@ func TestSeedSync_NotificationFiresOnPushNonConflictFailure(t *testing.T) {
 	ns, proj := "pnotify", "fail"
 	sc, ec, hs := setupSeedSyncTest(t, ns, proj)
 
-	var buf bytes.Buffer
+	var buf syncBuffer
 	ec.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	notifyEnabled := true

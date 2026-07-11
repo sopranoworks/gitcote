@@ -302,7 +302,7 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
       {pr.state === 'open' && (
         <div className={styles.section}>
           <div className={styles.actions}>
-            {hasReviewer && (
+            {hasReviewer && data.retry_eligible && (
               <button className={styles.reviewBtn} disabled={reviewing} onClick={() => void handleReview()}>
                 {reviewing ? 'Reviewing…' : 'Review'}
               </button>

@@ -730,7 +730,13 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if err != nil {
 			return nil, retryPRAgentOutput{}, err
 		}
+
+		lockKey := agentTokenKey(in.Namespace, in.ProjectName, int(in.Number))
+		if !acquirePRAgentLock(lockKey) {
+			return nil, retryPRAgentOutput{}, fmt.Errorf("PR #%d: an agent operation is already in progress", in.Number)
+		}
 		if eligible, reason := prRetryEligible(ec, p); !eligible {
+			releasePRAgentLock(lockKey)
 			return nil, retryPRAgentOutput{}, fmt.Errorf("%s", reason)
 		}
 
@@ -745,6 +751,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 			p.InterruptInfo = nil
 			p.UpdatedAt = time.Now()
 			if err := prStore.Update(p); err != nil {
+				releasePRAgentLock(lockKey)
 				return nil, retryPRAgentOutput{}, err
 			}
 		}
@@ -791,7 +798,10 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		}
 		action.AgentEnabled = true
 
-		go spawnAgentForPR(ec, action, p, role)
+		go func() {
+			defer releasePRAgentLock(lockKey)
+			spawnAgentForPR(ec, action, p, role)
+		}()
 
 		return nil, retryPRAgentOutput{Number: p.Number, State: string(p.State), Message: "agent re-spawned"}, nil
 	})
@@ -1369,7 +1379,14 @@ func handlePRRetryAgent(c *uiws.Client, gitStore *git.Store, ec *eventContext, p
 		c.SendError(err.Error())
 		return
 	}
+
+	lockKey := agentTokenKey(p.Namespace, p.ProjectName, int(p.Number))
+	if !acquirePRAgentLock(lockKey) {
+		c.SendError(fmt.Sprintf("PR #%d: an agent operation is already in progress", p.Number))
+		return
+	}
 	if eligible, reason := prRetryEligible(ec, pullReq); !eligible {
+		releasePRAgentLock(lockKey)
 		c.SendError(reason)
 		return
 	}
@@ -1385,6 +1402,7 @@ func handlePRRetryAgent(c *uiws.Client, gitStore *git.Store, ec *eventContext, p
 		pullReq.InterruptInfo = nil
 		pullReq.UpdatedAt = time.Now()
 		if err := prStore.Update(pullReq); err != nil {
+			releasePRAgentLock(lockKey)
 			c.SendError(err.Error())
 			return
 		}
@@ -1434,7 +1452,10 @@ func handlePRRetryAgent(c *uiws.Client, gitStore *git.Store, ec *eventContext, p
 	}
 	action.AgentEnabled = true
 
-	go spawnAgentForPR(ec, action, pullReq, role)
+	go func() {
+		defer releasePRAgentLock(lockKey)
+		spawnAgentForPR(ec, action, pullReq, role)
+	}()
 
 	c.SendResponse(MsgPRRetryAgent, map[string]interface{}{
 		"number":  pullReq.Number,
@@ -1651,7 +1672,25 @@ func handlePRReview(c *uiws.Client, gitStore *git.Store, ec *eventContext, paylo
 		return
 	}
 
-	go onPRCreated(ec, prObj)
+	// Reuses prRetryEligible's queue/token checks (the interrupted-state
+	// branch is unreachable here since state is already confirmed Open
+	// above) — Review must not be allowed to jump the FIFO queue or
+	// double-spawn over an agent that's already running, same as Retry.
+	lockKey := agentTokenKey(p.Namespace, p.ProjectName, int(p.Number))
+	if !acquirePRAgentLock(lockKey) {
+		c.SendError(fmt.Sprintf("PR #%d: an agent operation is already in progress", p.Number))
+		return
+	}
+	if eligible, reason := prRetryEligible(ec, prObj); !eligible {
+		releasePRAgentLock(lockKey)
+		c.SendError(reason)
+		return
+	}
+
+	go func() {
+		defer releasePRAgentLock(lockKey)
+		onPRCreated(ec, prObj)
+	}()
 
 	c.SendResponse(MsgPRReview, map[string]interface{}{
 		"number":  prObj.Number,
