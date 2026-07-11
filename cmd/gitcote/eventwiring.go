@@ -225,12 +225,19 @@ type eventContext struct {
 	logger      *slog.Logger
 }
 
-func notify(method, message string, namespace, project string, prNumber uint32, logger *slog.Logger) {
+// notify dispatches a PR/seed-sync notification. eventType is a stable,
+// machine-readable tag ("created", "confirm_pending", "merged", "rejected",
+// "merge_conflict", "operator_rejected", or an interrupt reason such as
+// "agent_spawn_failed") distinct from the free-text message — external
+// consumers (e.g. an MCP-connected orchestrator) can switch on eventType
+// without parsing message prose, and namespace/project/prNumber already
+// disambiguate which PR it refers to.
+func notify(method, message string, namespace, project string, prNumber uint32, eventType string, logger *slog.Logger) {
 	switch method {
 	case "log":
-		logger.Info("PR notification", "message", message, "namespace", namespace, "project", project, "pr", prNumber)
+		logger.Info("PR notification", "event", eventType, "message", message, "namespace", namespace, "project", project, "pr", prNumber)
 	default:
-		logger.Info("PR notification (method not implemented)", "method", method, "message", message)
+		logger.Info("PR notification (method not implemented)", "method", method, "event", eventType, "message", message)
 	}
 }
 
@@ -252,7 +259,7 @@ func notifyInterrupt(ec *eventContext, method string, p *pr.PullRequest, reason,
 		fmt.Fprintf(&msg, "\nLink: %s/p/%s/%s/prs?pr=%d",
 			strings.TrimSuffix(ec.gitcoteURL, "/"), p.RepoNamespace, p.RepoProject, p.Number)
 	}
-	notify(method, msg.String(), p.RepoNamespace, p.RepoProject, p.Number, ec.logger)
+	notify(method, msg.String(), p.RepoNamespace, p.RepoProject, p.Number, reason, ec.logger)
 }
 
 // resolveSeedSyncAction resolves the configured event action for a seed
@@ -310,7 +317,7 @@ func notifySeedSyncInterrupt(ec *eventContext, method, ns, proj, reason, detail,
 		fmt.Fprintf(&msg, "\nLink: %s/p/%s/%s",
 			strings.TrimSuffix(ec.gitcoteURL, "/"), ns, proj)
 	}
-	notify(method, msg.String(), ns, proj, 0, ec.logger)
+	notify(method, msg.String(), ns, proj, 0, reason, ec.logger)
 }
 
 // markInterrupted transitions a PR to interrupted state.
@@ -696,6 +703,7 @@ func reattemptMerge(ec *eventContext, p *pr.PullRequest, agentName, role string)
 
 	ec.logger.Info("reattempt merge: PR merged after conflict resolution",
 		"pr", p.Number, "merge_commit", mergeHash.String()[:8])
+	go maybeNotifyMerged(ec, p)
 	return true
 }
 
@@ -732,9 +740,11 @@ func releasePRSlotAndDequeue(ec *eventContext, ns, proj string, prNumber int) {
 	go onPRCreated(ec, p)
 }
 
-func resolveAutoConfirm(ec *eventContext, ns, proj string) bool {
+// resolveConfirmAction resolves the OnConfirmed action (auto-confirm +
+// notify settings) for a project, merging project → global.
+func resolveConfirmAction(ec *eventContext, ns, proj string) integrity.ResolvedConfirmAction {
 	if ec.integrityHS == nil {
-		return false
+		return integrity.ResolveConfirmAction(nil, nil)
 	}
 	global, _ := ec.integrityHS.GetGlobalPREventSettings()
 	project, _ := ec.integrityHS.GetProjectPREventSettings(ns, proj)
@@ -745,7 +755,27 @@ func resolveAutoConfirm(ec *eventContext, ns, proj string) bool {
 	if project != nil {
 		projectAction = project.OnConfirmed
 	}
-	return integrity.ResolveConfirmAction(projectAction, globalAction).AutoConfirm
+	return integrity.ResolveConfirmAction(projectAction, globalAction)
+}
+
+func resolveAutoConfirm(ec *eventContext, ns, proj string) bool {
+	return resolveConfirmAction(ec, ns, proj).AutoConfirm
+}
+
+// maybeNotifyMerged fires a "merged" notification when a PR successfully
+// merges, from any of the three merge paths (auto-confirm, manual confirm,
+// merger-agent reattempt). Reuses the same OnConfirmed notify toggle that
+// already governs the confirm-pending notification, since merge-completed
+// is the natural conclusion of the same confirm flow — see directive
+// 2026-07-11-investigate-rohrpost-integration, Task A point 4: a single
+// shared toggle is the accepted minimal default absent a dedicated one.
+func maybeNotifyMerged(ec *eventContext, p *pr.PullRequest) {
+	action := resolveConfirmAction(ec, p.RepoNamespace, p.RepoProject)
+	if !action.NotifyEnabled {
+		return
+	}
+	msg := fmt.Sprintf("PR #%d merged: %s", p.Number, p.Title)
+	notify(action.NotifyMethod, msg, p.RepoNamespace, p.RepoProject, p.Number, "merged", ec.logger)
 }
 
 // --- PR Event Hooks ---
@@ -777,7 +807,7 @@ func onPRCreated(ec *eventContext, p *pr.PullRequest) {
 		go spawnAgentForPR(ec, action, p, "reviewer")
 	}
 	if action.NotifyEnabled {
-		go notify(action.NotifyMethod, fmt.Sprintf("PR #%d created: %s", p.Number, p.Title), p.RepoNamespace, p.RepoProject, p.Number, ec.logger)
+		go notify(action.NotifyMethod, fmt.Sprintf("PR #%d created: %s", p.Number, p.Title), p.RepoNamespace, p.RepoProject, p.Number, "created", ec.logger)
 	}
 }
 
@@ -806,7 +836,7 @@ func onPRApproved(ec *eventContext, p *pr.PullRequest) {
 			}
 		}()
 	} else if action.NotifyEnabled {
-		go notify(action.NotifyMethod, fmt.Sprintf("PR #%d approved, awaiting manual confirm", p.Number), p.RepoNamespace, p.RepoProject, p.Number, ec.logger)
+		go notify(action.NotifyMethod, fmt.Sprintf("PR #%d approved, awaiting manual confirm", p.Number), p.RepoNamespace, p.RepoProject, p.Number, "confirm_pending", ec.logger)
 	}
 }
 
@@ -876,6 +906,7 @@ func autoMergePR(ec *eventContext, p *pr.PullRequest) error {
 
 	invalidateApprovalsForPush(ec.gitStore, ec.logger, p.RepoNamespace, p.RepoProject)
 
+	go maybeNotifyMerged(ec, p)
 	releasePRSlotAndDequeue(ec, p.RepoNamespace, p.RepoProject, int(p.Number))
 
 	return nil
@@ -902,7 +933,7 @@ func onPRRejected(ec *eventContext, p *pr.PullRequest) {
 		go spawnAgentForPR(ec, action, p, "coder")
 	}
 	if action.NotifyEnabled {
-		go notify(action.NotifyMethod, fmt.Sprintf("PR #%d rejected", p.Number), p.RepoNamespace, p.RepoProject, p.Number, ec.logger)
+		go notify(action.NotifyMethod, fmt.Sprintf("PR #%d rejected", p.Number), p.RepoNamespace, p.RepoProject, p.Number, "rejected", ec.logger)
 	}
 }
 
@@ -927,7 +958,7 @@ func onPRMergeConflict(ec *eventContext, p *pr.PullRequest) {
 		go spawnAgentForPR(ec, action, p, "merger")
 	}
 	if action.NotifyEnabled {
-		go notify(action.NotifyMethod, fmt.Sprintf("PR #%d has merge conflicts", p.Number), p.RepoNamespace, p.RepoProject, p.Number, ec.logger)
+		go notify(action.NotifyMethod, fmt.Sprintf("PR #%d has merge conflicts", p.Number), p.RepoNamespace, p.RepoProject, p.Number, "merge_conflict", ec.logger)
 	}
 }
 

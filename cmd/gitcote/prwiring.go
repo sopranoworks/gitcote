@@ -1371,6 +1371,7 @@ func handlePRMerge(c *uiws.Client, gitStore *git.Store, ec *eventContext, payloa
 
 	invalidateApprovalsForPush(gitStore, slog.Default(), p.Namespace, p.ProjectName)
 
+	go maybeNotifyMerged(ec, pullReq)
 	releasePRSlotAndDequeue(ec, p.Namespace, p.ProjectName, int(pullReq.Number))
 
 	sc := ec.seedCtx
@@ -1655,7 +1656,7 @@ func operatorRejectPR(gitStore *git.Store, ec *eventContext, ns, proj string, pr
 	if len(pullReq.ResultFiles) > 0 {
 		fmt.Fprintf(&msg, "\nResult files: %s", strings.Join(pullReq.ResultFiles, ", "))
 	}
-	notify("log", msg.String(), ns, proj, pullReq.Number, ec.logger)
+	notify("log", msg.String(), ns, proj, pullReq.Number, "operator_rejected", ec.logger)
 
 	return pullReq, nil
 }

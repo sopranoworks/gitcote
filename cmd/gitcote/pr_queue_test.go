@@ -741,3 +741,73 @@ func TestNotifyInterrupt_MergerReasons(t *testing.T) {
 		})
 	}
 }
+
+func TestNotify_EventFieldPresent(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	notify("log", "PR #7 created: Add feature", "ns", "proj", 7, "created", logger)
+
+	output := buf.String()
+	if !strings.Contains(output, "event=created") {
+		t.Errorf("expected structured event=created field, got: %s", output)
+	}
+}
+
+func TestMaybeNotifyMerged_FiresWhenConfirmNotifyEnabled(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	baseDir := t.TempDir()
+
+	integrityStore, err := integrity.Open(filepath.Join(baseDir, "repo_heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { integrityStore.Close() })
+
+	notifyEnabled := true
+	if err := integrityStore.SetGlobalPREventSettings(&integrity.PREventSettings{
+		OnConfirmed: &integrity.ConfirmAction{NotifyEnabled: &notifyEnabled, NotifyMethod: "log"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ec := &eventContext{logger: logger, integrityHS: integrityStore}
+	p := &pr.PullRequest{
+		Number:        7,
+		RepoNamespace: "ns",
+		RepoProject:   "proj",
+		Title:         "Add feature X",
+	}
+
+	maybeNotifyMerged(ec, p)
+
+	output := buf.String()
+	for _, want := range []string{"event=merged", "PR #7 merged", "Add feature X", "ns", "proj"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("notification log missing %q\nGot: %s", want, output)
+		}
+	}
+}
+
+func TestMaybeNotifyMerged_SkippedWhenConfirmNotifyDisabled(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	baseDir := t.TempDir()
+
+	integrityStore, err := integrity.Open(filepath.Join(baseDir, "repo_heads.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { integrityStore.Close() })
+
+	// No OnConfirmed settings at all — resolves to NotifyEnabled=false by default.
+	ec := &eventContext{logger: logger, integrityHS: integrityStore}
+	p := &pr.PullRequest{Number: 7, RepoNamespace: "ns", RepoProject: "proj"}
+
+	maybeNotifyMerged(ec, p)
+
+	if buf.Len() > 0 {
+		t.Errorf("expected no notification when confirm notify disabled, got: %s", buf.String())
+	}
+}
