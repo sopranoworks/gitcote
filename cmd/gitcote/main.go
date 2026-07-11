@@ -239,6 +239,12 @@ func run(cfg *Config, logger *slog.Logger) error {
 		logger:      logger,
 	}
 
+	// ---- Reconcile any agent left "running" by a prior crash/restart ----
+	// Must run before any listener starts accepting requests: it clears the
+	// stale AgentTokenRecord that would otherwise permanently block Retry
+	// for the affected PR/seed sync (see reconcileOrphanedAgents).
+	reconcileOrphanedAgents(evtCtx, logger)
+
 	// ---- Smart HTTP handler (/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
 	gitHTTP := git.NewHandler(gitStore, logger)
 	gitHTTP.PreReceive = func(namespace, project string, principal auth.Principal, refUpdates []git.RefUpdate) error {
