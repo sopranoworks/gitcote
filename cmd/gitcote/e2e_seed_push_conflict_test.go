@@ -149,10 +149,16 @@ func TestSeedPushConflict_QueueAndAgentWiring(t *testing.T) {
 	if cfgAfter.SyncStatus == nil {
 		t.Fatal("expected sync status to be set after conflict")
 	}
-	if cfgAfter.SyncStatus.LastResult != "conflict" {
-		t.Fatalf("sync status last_result = %q, want conflict", cfgAfter.SyncStatus.LastResult)
+	if cfgAfter.SyncStatus.State != "conflict" {
+		t.Fatalf("sync status state = %q, want conflict", cfgAfter.SyncStatus.State)
 	}
-	t.Logf("PASS: sync status updated (state=%s, result=%s)", cfgAfter.SyncStatus.State, cfgAfter.SyncStatus.LastResult)
+	if cfgAfter.SyncStatus.Reason != "push_conflict" {
+		t.Fatalf("sync status reason = %q, want push_conflict", cfgAfter.SyncStatus.Reason)
+	}
+	if cfgAfter.SyncStatus.LastResult == "" {
+		t.Fatal("expected sync status last_result to carry failure detail, got empty")
+	}
+	t.Logf("PASS: sync status updated (state=%s, reason=%s, result=%s)", cfgAfter.SyncStatus.State, cfgAfter.SyncStatus.Reason, cfgAfter.SyncStatus.LastResult)
 
 	// Verify onSeedPushConflict would check the right settings.
 	if !seedPushConflictAgentEnabled(evtCtx, ns, proj) {

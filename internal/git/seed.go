@@ -42,8 +42,9 @@ type SeedConfig struct {
 type SeedSyncStatus struct {
 	State       string     `json:"state"`
 	Direction   string     `json:"direction,omitempty"` // "pull" or "push" — which flow last entered conflict/interrupted
+	Reason      string     `json:"reason,omitempty"`    // categorical cause, e.g. "pull_conflict", "push_failed", "agent_spawn_failed" — mirrors pr.InterruptInfo.Reason
 	LastPushAt  *time.Time `json:"last_push_at,omitempty"`
-	LastResult  string     `json:"last_result,omitempty"`
+	LastResult  string     `json:"last_result,omitempty"` // free-text detail for Reason, e.g. the underlying SSH/network error
 	PausedSince *time.Time `json:"paused_since,omitempty"`
 }
 

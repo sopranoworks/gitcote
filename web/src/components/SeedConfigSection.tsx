@@ -44,12 +44,39 @@ export function SeedConfigSection({
   )
 }
 
+// reasonLabel turns the backend's categorical Reason (mirroring
+// pr.InterruptInfo.Reason — see updateSeedSyncStateDetail) into text that
+// tells the operator what actually went wrong, not just that something
+// did. Without this, "push interrupted" reads identically whether the
+// cause was a merge conflict needing a merger/manual resolution, or an
+// infrastructure problem (missing SSH key, unreachable seed remote) that
+// retrying blindly would just reproduce.
+function reasonLabel(reason: string | undefined, direction: string): string {
+  const dir = direction === 'push' ? 'push' : 'pull'
+  switch (reason) {
+    case 'pull_conflict':
+    case 'push_conflict':
+      return `${dir} conflict: manual merge or a configured merger agent is required`
+    case 'pull_failed':
+    case 'push_failed':
+      return `${dir} failed`
+    case 'agent_spawn_failed':
+      return `${dir} conflict — merger agent could not be started`
+    case 'seed_sync_agent_failed':
+      return `${dir} conflict — merger agent failed`
+    default:
+      return `${dir} interrupted`
+  }
+}
+
 // SeedSyncRecoveryBar is the operator-facing recovery surface for a stuck
 // seed sync (conflict or interrupted, pull or push) — the WebUI previously
 // had no entry point for retry_seed_sync/dismiss_seed_sync at all, only
 // MCP-tool access. Deliberately minimal: a status line naming the direction
 // (so the operator isn't misled about what they're retrying — pull and push
-// are different operations, see the c31e6b3 direction-dispatch fix) plus
+// are different operations, see the c31e6b3 direction-dispatch fix) and the
+// actual failure category/detail (see reasonLabel above — pull/push and
+// conflict/infrastructure-failure are all distinguishable at a glance) plus
 // Retry and Dismiss, wired directly to the existing tools.
 function SeedSyncRecoveryBar({
   namespace,
@@ -72,6 +99,8 @@ function SeedSyncRecoveryBar({
   if (state !== 'conflict' && state !== 'interrupted') return null
 
   const direction = data?.syncStatus?.direction === 'push' ? 'push' : 'pull'
+  const reason = data?.syncStatus?.reason
+  const detail = data?.syncStatus?.last_result
 
   async function run(action: () => Promise<{ message: string }>) {
     setBusy(true)
@@ -87,9 +116,10 @@ function SeedSyncRecoveryBar({
   }
 
   return (
-    <div className={styles.recoveryBar} data-testid="seed-sync-recovery" data-direction={direction}>
+    <div className={styles.recoveryBar} data-testid="seed-sync-recovery" data-direction={direction} data-reason={reason ?? ''}>
       <span className={styles.recoveryText}>
-        Seed sync {state} ({direction}){data?.syncStatus?.last_result ? `: ${data.syncStatus.last_result}` : ''}
+        {reasonLabel(reason, direction)}
+        {detail ? `: ${detail}` : ''}
       </span>
       <button
         className={styles.btn}

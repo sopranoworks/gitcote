@@ -275,7 +275,7 @@ func TestSeedSync_SlotRetainedWhenAgentDisabled(t *testing.T) {
 
 	// Agent spawning is disabled. spawnAgentForSeedSync returns early
 	// without releasing the slot or marking interrupted.
-	spawnAgentForSeedSync(ec, action, ns, proj, "/tmp/nonexistent", []string{"conflict.txt"})
+	spawnAgentForSeedSync(ec, action, ns, proj, "pull", "/tmp/nonexistent", []string{"conflict.txt"})
 
 	time.Sleep(50 * time.Millisecond)
 

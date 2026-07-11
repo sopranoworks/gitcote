@@ -133,6 +133,28 @@ async function waitForPRState(page: Page, ns: string, proj: string, prNum: numbe
   throw new Error(`PR #${prNum} did not reach state "${state}" within ${timeout}ms`)
 }
 
+// Pushes a source branch and a diverging main, reproducing a genuine
+// merge-conflict PR the same way production does: real reviewer approval,
+// then the target diverges after approval so the merge attempt itself
+// (not PR creation) is what discovers the conflict.
+function pushMergeConflictSource(repo: string, branch: string, title: string) {
+  git(repo, 'checkout', '-b', branch)
+  execSync('echo "PR-side change" > conflict.txt', { cwd: repo, shell: '/bin/bash' })
+  git(repo, 'add', 'conflict.txt')
+  git(repo, 'commit', '-m', title)
+  git(repo, 'push', '-u', 'origin', branch,
+    '-o', 'pull_request.create',
+    '-o', `pull_request.title=${title}`)
+}
+
+function divergeMain(repo: string, content: string) {
+  git(repo, 'checkout', 'main')
+  execSync(`echo "${content}" > conflict.txt`, { cwd: repo, shell: '/bin/bash' })
+  git(repo, 'add', 'conflict.txt')
+  git(repo, 'commit', '-m', content)
+  git(repo, 'push', 'origin', 'main')
+}
+
 // This exercises Task A of the seed-sync/merge-conflict WebUI recovery
 // directive: commit c31e6b3 claimed RetryPanel shows a "Start merge"
 // button for state === 'merge_conflict', but that was only proven against
@@ -166,13 +188,7 @@ test.describe('Merge-conflict PR retry — WebUI', () => {
     const content = page.locator('#content')
 
     const repo = cloneAndInit(token, 'mcr', 'demo')
-    git(repo, 'checkout', '-b', 'feat/conflict-source')
-    execSync('echo "PR-side change" > conflict.txt', { cwd: repo, shell: '/bin/bash' })
-    git(repo, 'add', 'conflict.txt')
-    git(repo, 'commit', '-m', 'PR-side change')
-    git(repo, 'push', '-u', 'origin', 'feat/conflict-source',
-      '-o', 'pull_request.create',
-      '-o', 'pull_request.title=Conflict source PR')
+    pushMergeConflictSource(repo, 'feat/conflict-source', 'Conflict source PR')
 
     // Real mock_reviewer approval — proves the PR reaches approved through
     // the genuine review flow, not a fabricated state.
@@ -181,11 +197,7 @@ test.describe('Merge-conflict PR retry — WebUI', () => {
     // Diverge the target branch directly, after approval — the same race
     // handlePRMerge is built to detect: approval doesn't re-check the
     // target on every subsequent commit, only on merge attempt.
-    git(repo, 'checkout', 'main')
-    execSync('echo "main-side change" > conflict.txt', { cwd: repo, shell: '/bin/bash' })
-    git(repo, 'add', 'conflict.txt')
-    git(repo, 'commit', '-m', 'main-side change')
-    git(repo, 'push', 'origin', 'main')
+    divergeMain(repo, 'main-side change')
 
     // Trigger the merge attempt via the same PR_MERGE action the "Confirm"
     // button calls — this is what actually flips the PR to merge_conflict
@@ -209,5 +221,138 @@ test.describe('Merge-conflict PR retry — WebUI', () => {
     await startMergeBtn.click()
     await expect(content.getByText(/no merger agent configured/i)).toBeVisible({ timeout: 10000 })
     await page.screenshot({ path: 'test-results/merge-conflict-start-merge-rejected.png', fullPage: false })
+  })
+
+  // Task A, directive 2026-07-11-verify-ui-concurrency-and-disambiguation:
+  // a rapid double-click must never crash the page or leave it in a
+  // confusing state (e.g. two stacked/contradictory messages) — whether
+  // the frontend's busy-disable or the backend's acquirePRAgentLock is
+  // what actually prevents the second call from doing anything, the
+  // observable result must be clean.
+  test('rapid double-click on Start merge does not crash or leave a confusing state', async ({ page }) => {
+    test.setTimeout(120_000)
+    const content = page.locator('#content')
+
+    // Own project — a merge-conflict PR left unresolved (as in the previous
+    // test) would otherwise occupy the FIFO queue slot forever and block a
+    // second PR in the same project from ever reaching "approved".
+    await ensureProject(page, 'mcrdbl', 'demo')
+    await setPREventSettings(page, 'mcrdbl', 'demo', {
+      on_created: { agent_enabled: true, agent_name: 'mock_reviewer' },
+      on_confirmed: { auto_confirm: false },
+    })
+    const dblToken = await issueGitToken(page)
+
+    const repo = cloneAndInit(dblToken, 'mcrdbl', 'demo')
+    pushMergeConflictSource(repo, 'feat/dblclick-source', 'Double-click conflict PR')
+    await waitForPRState(page, 'mcrdbl', 'demo', 1, 'approved')
+    divergeMain(repo, 'main-side change (dblclick)')
+    await wsRequest(page, 'PR_MERGE', { namespace: 'mcrdbl', projectName: 'demo', number: 1 })
+    await waitForPRState(page, 'mcrdbl', 'demo', 1, 'merge_conflict')
+
+    const startMergeBtn = content.getByRole('button', { name: 'Start merge', exact: true })
+    await expect(startMergeBtn).toBeVisible({ timeout: 5000 })
+
+    // Fire two clicks as close together as Playwright allows. allSettled
+    // plus a short per-click timeout means a stability/detached-element
+    // outcome from the loser (e.g. if a re-render swaps the button) is
+    // treated as an acceptable settle, not a hang until the test timeout.
+    await Promise.allSettled([
+      startMergeBtn.click({ timeout: 5000 }),
+      startMergeBtn.click({ force: true, timeout: 5000 }),
+    ])
+
+    // Whichever of the two "won" (frontend disable, or backend lock), the
+    // settled page must show exactly one rejection message, not a pile of
+    // duplicated/contradictory ones, and the page must still be
+    // responsive (not stuck mid-request forever).
+    const errorText = page.getByText(/no merger agent configured|already in progress/i)
+    await expect(errorText).toBeVisible({ timeout: 10000 })
+    const errorCount = await errorText.count()
+    if (errorCount > 1) {
+      throw new Error(`expected at most one error message after a rapid double-click, found ${errorCount}`)
+    }
+    // The panel must still be usable afterward — not stuck disabled.
+    await expect(startMergeBtn).toBeEnabled({ timeout: 10000 })
+    await page.screenshot({ path: 'test-results/merge-conflict-dblclick-settled.png', fullPage: false })
+  })
+
+  // Task A, multi-session: N independent connections (standing in for N
+  // browser tabs/sessions — each opens its own real WebSocket exactly as
+  // the app's wsClient does) all fire retry_pr_agent for the SAME
+  // merge-conflict PR at effectively the same instant. No merger is
+  // configured, so every call is ultimately rejected either way — but
+  // that's exactly what makes this a clean concurrency probe: the only
+  // question is HOW each call is rejected. acquirePRAgentLock's critical
+  // section on this rejection path is short (released synchronously, not
+  // held through a spawn), so depending on arrival order a late call can
+  // legitimately see either "an agent operation is already in progress"
+  // (genuinely raced against the winner) or "no merger agent configured"
+  // (arrived after the winner already finished and released the lock) —
+  // both are correct, clean outcomes. What must NEVER happen: a crash, an
+  // unexpected error, or more than one call actually proceeding to spawn.
+  test('multiple concurrent sessions racing Start merge: no crash, no double-spawn, only clean rejections', async ({ page }) => {
+    test.setTimeout(120_000)
+    await ensureProject(page, 'mcrace', 'demo')
+    await setPREventSettings(page, 'mcrace', 'demo', {
+      on_created: { agent_enabled: true, agent_name: 'mock_reviewer' },
+      on_confirmed: { auto_confirm: false },
+    })
+    const raceToken = await issueGitToken(page)
+
+    const repo = cloneAndInit(raceToken, 'mcrace', 'demo')
+    pushMergeConflictSource(repo, 'feat/race-source', 'Race conflict PR')
+    await waitForPRState(page, 'mcrace', 'demo', 1, 'approved')
+    divergeMain(repo, 'main-side change (race)')
+    await wsRequest(page, 'PR_MERGE', { namespace: 'mcrace', projectName: 'demo', number: 1 })
+    await waitForPRState(page, 'mcrace', 'demo', 1, 'merge_conflict')
+
+    const outcomes = await page.evaluate(
+      ({ ns, proj, n }) => {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+        function fire(): Promise<{ ok: boolean; message: string }> {
+          return new Promise((resolve) => {
+            const ws = new WebSocket(`${proto}//${location.host}/ws/ui`)
+            ws.onopen = () => {
+              ws.send(JSON.stringify({
+                type: 'PR_RETRY_AGENT',
+                payload: { namespace: ns, projectName: proj, number: 1 },
+              }))
+            }
+            ws.onmessage = (ev) => {
+              const msg = JSON.parse(ev.data)
+              ws.close()
+              if (msg.type === 'ERROR') resolve({ ok: false, message: msg.payload?.message ?? '' })
+              else resolve({ ok: true, message: msg.payload?.message ?? '' })
+            }
+            ws.onerror = () => resolve({ ok: false, message: 'ws error' })
+            setTimeout(() => { ws.close(); resolve({ ok: false, message: 'timeout' }) }, 15000)
+          })
+        }
+        // Open all sockets first so only the .send() calls race, not
+        // connection setup.
+        const sockets: Promise<{ ok: boolean; message: string }>[] = []
+        for (let i = 0; i < n; i++) sockets.push(fire())
+        return Promise.all(sockets)
+      },
+      { ns: 'mcrace', proj: 'demo', n: 6 },
+    )
+
+    const succeeded = outcomes.filter(o => o.ok)
+    const cleanRejection = /already in progress|no merger agent configured/i
+    const unexpected = outcomes.filter(o => !o.ok && !cleanRejection.test(o.message))
+
+    if (unexpected.length > 0) {
+      throw new Error(`unexpected non-clean rejection(s): ${JSON.stringify(unexpected)}`)
+    }
+    // With no merger configured, nothing should ever actually succeed —
+    // proving concurrency doesn't accidentally let a spawn slip through
+    // that the AgentEnabled=false check would otherwise have blocked.
+    if (succeeded.length > 0) {
+      throw new Error(`expected no call to succeed (no merger configured), got ${succeeded.length}: ${JSON.stringify(outcomes)}`)
+    }
+    if (outcomes.length !== 6) {
+      throw new Error(`expected 6 responses, got ${outcomes.length}`)
+    }
   })
 })

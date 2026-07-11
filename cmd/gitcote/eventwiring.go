@@ -80,6 +80,33 @@ func releasePRAgentLock(key string) {
 	prAgentActive.Delete(key)
 }
 
+// seedSyncOpActive guards handleSeedSyncRetryWS/retry_seed_sync and
+// handleSeedSyncDismissWS/dismiss_seed_sync against the same TOCTOU gap
+// prAgentActive closes for PR retries: two concurrent calls (rapid
+// double-click, or two browser sessions on the same stuck seed sync) can
+// both pass the "is seed sync the active queue entry" check before either
+// has released the slot — the check and the mutation are not atomic. Without
+// a lock here, BOTH calls would send a "status: ok" WS response, even
+// though only one of the underlying executeSeedPush/executeSeedPull calls
+// actually runs (the other silently loses the race inside its own
+// acquireSeedLock, in a fire-and-forget goroutine with no way to report
+// back) — a false success, not a clean rejection. Keyed by namespace/project
+// since seed sync is per-project, not per-PR.
+var seedSyncOpActive sync.Map // key: ns/proj → bool
+
+func acquireSeedSyncOpLock(key string) bool {
+	_, loaded := seedSyncOpActive.LoadOrStore(key, true)
+	return !loaded
+}
+
+func releaseSeedSyncOpLock(key string) {
+	seedSyncOpActive.Delete(key)
+}
+
+func seedSyncOpKey(ns, proj string) string {
+	return ns + "/" + proj
+}
+
 func taskTypeForRole(role string) string {
 	switch role {
 	case "reviewer":
@@ -924,7 +951,7 @@ func onSeedPullConflict(ec *eventContext, ns, proj, tempDir string, conflictFile
 
 	action := integrity.ResolveEventAction(projectAction, globalAction)
 	if action.AgentEnabled {
-		go spawnAgentForSeedSync(ec, action, ns, proj, tempDir, conflictFiles)
+		go spawnAgentForSeedSync(ec, action, ns, proj, "pull", tempDir, conflictFiles)
 	}
 }
 
@@ -946,14 +973,14 @@ func onSeedPushConflict(ec *eventContext, ns, proj, tempDir string, conflictFile
 
 	action := integrity.ResolveEventAction(projectAction, globalAction)
 	if action.AgentEnabled {
-		go spawnAgentForSeedSync(ec, action, ns, proj, tempDir, conflictFiles)
+		go spawnAgentForSeedSync(ec, action, ns, proj, "push", tempDir, conflictFiles)
 	}
 }
 
 // spawnAgentForSeedSync finds the appropriate merger agent and executes it for seed sync conflict resolution.
 // On failure, the queue slot is retained (matching PR interrupt behavior) so PR
 // auto-merge is suspended until the operator retries or dismisses.
-func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventAction, ns, proj, tempDir string, conflictFiles []string) {
+func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventAction, ns, proj, direction, tempDir string, conflictFiles []string) {
 	if !ec.agentCfg.IsEnabled() {
 		return
 	}
@@ -963,7 +990,7 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 	if err != nil {
 		ec.logger.Error("scan agent configs for seed sync", "error", err)
 		detail := fmt.Sprintf("scan configs: %v", err)
-		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		updateSeedSyncStateDetail(ec.gitStore, ns, proj, "interrupted", direction, "agent_spawn_failed", detail)
 		if action.NotifyEnabled {
 			go notifySeedSyncInterrupt(ec, action.NotifyMethod, ns, proj, "agent_spawn_failed", detail, action.AgentName)
 		}
@@ -983,7 +1010,7 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 	if ac == nil {
 		detail := "no agent config found for role: merger"
 		ec.logger.Warn("no agent config found for seed sync merger", "agent_name", action.AgentName)
-		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		updateSeedSyncStateDetail(ec.gitStore, ns, proj, "interrupted", direction, "agent_spawn_failed", detail)
 		if action.NotifyEnabled {
 			go notifySeedSyncInterrupt(ec, action.NotifyMethod, ns, proj, "agent_spawn_failed", detail, action.AgentName)
 		}
@@ -1025,7 +1052,7 @@ func spawnAgentForSeedSync(ec *eventContext, action integrity.ResolvedEventActio
 		}
 
 		ec.logger.Error("seed sync agent failed", "ns", ns, "proj", proj, "detail", detail)
-		updateSeedSyncState(ec.gitStore, ns, proj, "interrupted")
+		updateSeedSyncStateDetail(ec.gitStore, ns, proj, "interrupted", direction, "seed_sync_agent_failed", detail)
 		if action.NotifyEnabled {
 			go notifySeedSyncInterrupt(ec, action.NotifyMethod, ns, proj, "seed_sync_agent_failed", detail, ac.DirName)
 		}
@@ -1296,6 +1323,46 @@ func updateSeedSyncState(gitStore *git.Store, ns, proj, state string) {
 		cfg.SyncStatus = &git.SeedSyncStatus{}
 	}
 	cfg.SyncStatus.State = state
+	if state == "idle" {
+		// Resolved — a stale Reason/LastResult from a prior conflict/
+		// interrupt would otherwise linger and misrepresent why a NEW
+		// interrupt later occurred, since callers that don't have a
+		// reason to report (dismiss, retry-in-progress) go through this
+		// simple setter rather than updateSeedSyncStateDetail.
+		cfg.SyncStatus.Reason = ""
+		cfg.SyncStatus.LastResult = ""
+	}
+	_ = git.SaveSeedConfig(projPath, cfg)
+}
+
+// updateSeedSyncStateDetail is like updateSeedSyncStateDirection but also
+// persists a categorical Reason and free-text detail (LastResult) — the
+// seed-sync equivalent of pr.InterruptInfo{Reason, Detail}. Without this,
+// callers computed a specific failure reason/detail (e.g. "pull_failed" /
+// "no key configured", or the raw SSH/network error from FetchSeedRef) only
+// to hand it to the outbound notification and then discard it: the
+// persisted SyncStatus never recorded WHY a sync was interrupted beyond the
+// generic state string, so 'interrupted' from a missing SSH key was
+// indistinguishable from 'interrupted' because a configured merger agent
+// crashed — both just read "push interrupted" / "pull interrupted" in the
+// UI with no way to tell what retrying would actually attempt.
+func updateSeedSyncStateDetail(gitStore *git.Store, ns, proj, state, direction, reason, detail string) {
+	projPath, err := gitStore.ProjectPath(ns, proj)
+	if err != nil {
+		return
+	}
+	cfg, err := git.LoadSeedConfig(projPath)
+	if err != nil {
+		_ = git.UpdateSeedStatus(projPath, &git.SeedSyncStatus{State: state, Direction: direction, Reason: reason, LastResult: detail})
+		return
+	}
+	if cfg.SyncStatus == nil {
+		cfg.SyncStatus = &git.SeedSyncStatus{}
+	}
+	cfg.SyncStatus.State = state
+	cfg.SyncStatus.Direction = direction
+	cfg.SyncStatus.Reason = reason
+	cfg.SyncStatus.LastResult = detail
 	_ = git.SaveSeedConfig(projPath, cfg)
 }
 

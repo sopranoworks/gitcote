@@ -398,10 +398,10 @@ func executeSeedPull(sc *seedContext, ec *eventContext, namespace, project, bran
 		if success {
 			releaseSeedSyncSlot(ec, namespace, project)
 		} else if status == "conflict" {
-			updateSeedSyncStateDirection(ec.gitStore, namespace, project, "conflict", "pull")
+			updateSeedSyncStateDetail(ec.gitStore, namespace, project, "conflict", "pull", "pull_conflict", pullResultDetail(result))
 			maybeNotifySeedSyncInterrupt(ec, namespace, project, "pull", "pull_conflict", pullResultDetail(result))
 		} else if status != "queued" {
-			updateSeedSyncStateDirection(ec.gitStore, namespace, project, "interrupted", "pull")
+			updateSeedSyncStateDetail(ec.gitStore, namespace, project, "interrupted", "pull", "pull_failed", pullResultDetail(result))
 			maybeNotifySeedSyncInterrupt(ec, namespace, project, "pull", "pull_failed", pullResultDetail(result))
 		}
 	}
@@ -569,8 +569,15 @@ func handleSeedSyncRetryWS(c *uiws.Client, sc *seedContext, ec *eventContext, pa
 		c.SendError("integrity store not available")
 		return
 	}
+	lockKey := seedSyncOpKey(p.Namespace, p.ProjectName)
+	if !acquireSeedSyncOpLock(lockKey) {
+		c.SendError(fmt.Sprintf("seed sync operation already in progress for %s/%s", p.Namespace, p.ProjectName))
+		return
+	}
+
 	q, qerr := ec.integrityHS.GetPRQueue(p.Namespace, p.ProjectName)
 	if qerr != nil || q.ActivePR != integrity.SeedSyncSentinel {
+		releaseSeedSyncOpLock(lockKey)
 		c.SendError(fmt.Sprintf("seed sync is not the active queue entry for %s/%s", p.Namespace, p.ProjectName))
 		return
 	}
@@ -581,7 +588,19 @@ func handleSeedSyncRetryWS(c *uiws.Client, sc *seedContext, ec *eventContext, pa
 	releaseSeedSyncSlot(ec, p.Namespace, p.ProjectName)
 	updateSeedSyncState(sc.gitStore, p.Namespace, p.ProjectName, "retrying")
 
+	// Held through the async pull/push itself (not just this handler's
+	// synchronous portion) — released synchronously above on rejection is
+	// correct, but releasing it here on the success path would let a
+	// second retry call slip past the queue-active check while the FIRST
+	// retry's pull/push is still actually running (it re-acquires the
+	// SeedSyncSentinel slot inside executeSeedPull/executeSeedPush), giving
+	// that second call a false "status: ok" for work that never really
+	// started — the same false-success bug this lock exists to prevent,
+	// just one layer later. Mirrors how acquirePRAgentLock stays held
+	// through spawnAgentForPR rather than releasing once retry_pr_agent's
+	// handler returns.
 	go func() {
+		defer releaseSeedSyncOpLock(lockKey)
 		if direction == "push" {
 			_ = executeSeedPush(sc, ec, p.Namespace, p.ProjectName, "")
 		} else {
@@ -627,6 +646,13 @@ func handleSeedSyncDismissWS(c *uiws.Client, sc *seedContext, ec *eventContext, 
 		c.SendError("integrity store not available")
 		return
 	}
+	lockKey := seedSyncOpKey(p.Namespace, p.ProjectName)
+	if !acquireSeedSyncOpLock(lockKey) {
+		c.SendError(fmt.Sprintf("seed sync operation already in progress for %s/%s", p.Namespace, p.ProjectName))
+		return
+	}
+	defer releaseSeedSyncOpLock(lockKey)
+
 	q, qerr := ec.integrityHS.GetPRQueue(p.Namespace, p.ProjectName)
 	if qerr != nil || q.ActivePR != integrity.SeedSyncSentinel {
 		c.SendError(fmt.Sprintf("seed sync is not the active queue entry for %s/%s", p.Namespace, p.ProjectName))
@@ -702,10 +728,10 @@ func executeSeedPushWithMerge(sc *seedContext, ec *eventContext, namespace, proj
 		if result.Success {
 			releaseSeedSyncSlot(ec, namespace, projectName)
 		} else if result.Status == "conflict" {
-			updateSeedSyncStateDirection(ec.gitStore, namespace, projectName, "conflict", "push")
+			updateSeedSyncStateDetail(ec.gitStore, namespace, projectName, "conflict", "push", "push_conflict", result.Message)
 			maybeNotifySeedSyncInterrupt(ec, namespace, projectName, "push", "push_conflict", result.Message)
 		} else if result.Status != "queued" {
-			updateSeedSyncStateDirection(ec.gitStore, namespace, projectName, "interrupted", "push")
+			updateSeedSyncStateDetail(ec.gitStore, namespace, projectName, "interrupted", "push", "push_failed", result.Message)
 			maybeNotifySeedSyncInterrupt(ec, namespace, projectName, "push", "push_failed", result.Message)
 		}
 	}
@@ -898,8 +924,14 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 			return nil, retrySeedSyncOutput{}, fmt.Errorf("integrity store not available")
 		}
 
+		lockKey := seedSyncOpKey(in.Namespace, in.ProjectName)
+		if !acquireSeedSyncOpLock(lockKey) {
+			return nil, retrySeedSyncOutput{}, fmt.Errorf("seed sync operation already in progress for %s/%s", in.Namespace, in.ProjectName)
+		}
+
 		q, qerr := ec.integrityHS.GetPRQueue(in.Namespace, in.ProjectName)
 		if qerr != nil || q.ActivePR != integrity.SeedSyncSentinel {
+			releaseSeedSyncOpLock(lockKey)
 			return nil, retrySeedSyncOutput{}, fmt.Errorf("seed sync is not the active queue entry for %s/%s", in.Namespace, in.ProjectName)
 		}
 
@@ -909,8 +941,13 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 		releaseSeedSyncSlot(ec, in.Namespace, in.ProjectName)
 		updateSeedSyncState(gitStore, in.Namespace, in.ProjectName, "retrying")
 
+		// See handleSeedSyncRetryWS: held through the async pull/push, not
+		// just this handler's synchronous portion, so a second retry call
+		// can't slip past the queue-active check while the first retry's
+		// pull/push is still actually running.
 		sc := &seedContext{gitStore: gitStore, vault: v, gitcoteURL: gitcoteURL}
 		go func() {
+			defer releaseSeedSyncOpLock(lockKey)
 			if direction == "push" {
 				_ = executeSeedPush(sc, ec, in.Namespace, in.ProjectName, "")
 			} else {
@@ -934,6 +971,12 @@ func registerSeedTools(mcpServer *mcp.Server, gitStore *git.Store, v *vault.Vaul
 		if ec.integrityHS == nil {
 			return nil, dismissSeedSyncOutput{}, fmt.Errorf("integrity store not available")
 		}
+
+		lockKey := seedSyncOpKey(in.Namespace, in.ProjectName)
+		if !acquireSeedSyncOpLock(lockKey) {
+			return nil, dismissSeedSyncOutput{}, fmt.Errorf("seed sync operation already in progress for %s/%s", in.Namespace, in.ProjectName)
+		}
+		defer releaseSeedSyncOpLock(lockKey)
 
 		q, qerr := ec.integrityHS.GetPRQueue(in.Namespace, in.ProjectName)
 		if qerr != nil || q.ActivePR != integrity.SeedSyncSentinel {

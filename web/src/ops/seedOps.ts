@@ -3,6 +3,7 @@ import { wsClient } from '@shoka/web-core'
 export interface SeedSyncStatus {
   state: string
   direction?: string
+  reason?: string
   last_push_at?: string
   last_result?: string
   paused_since?: string

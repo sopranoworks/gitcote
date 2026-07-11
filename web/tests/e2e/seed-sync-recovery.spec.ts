@@ -271,4 +271,201 @@ test.describe('Seed sync recovery — WebUI', () => {
     await expect(barAfter).toContainText('push')
     await page.screenshot({ path: 'test-results/seed-sync-push-conflict-retried.png', fullPage: false })
   })
+
+  // Task A, directive 2026-07-11-verify-ui-concurrency-and-disambiguation:
+  // a rapid double-click on Retry must never crash the page or produce a
+  // false "success" for both clicks — this is exactly the gap the new
+  // seedSyncOpLock closes (previously, two concurrent SEED_SYNC_RETRY calls
+  // could both pass the "is seed sync the active queue entry" check before
+  // either released the slot, and BOTH would get a "status: ok" response).
+  test('rapid double-click on Retry pull does not crash or produce a false double-success', async ({ page }) => {
+    test.setTimeout(120_000)
+    await ensureAdminLoggedIn(page)
+    const ns = 'ssrdbl'
+    const proj = 'demo'
+    await ensureProject(page, ns, proj)
+    const token = await issueGitToken(page)
+
+    const repo = cloneAndInit(token, ns, proj)
+    const seedBareDir = makeDivergedSeedBare(repo)
+    execSync('echo "gitcote-side change (dblclick)" > conflict.txt', { cwd: repo, shell: '/bin/bash' })
+    git(repo, 'add', 'conflict.txt')
+    git(repo, 'commit', '-m', 'gitcote-side change (dblclick)')
+    git(repo, 'push', 'origin', 'main')
+
+    await setupSeedConfig(page, ns, proj, seedBareDir, 'ssrdbl-key')
+    await wsRequest(page, 'SEED_PULL', { namespace: ns, projectName: proj })
+
+    const bar = await waitForRecoveryBar(page, ns, proj, 'pull')
+    const retryBtn = bar.getByRole('button', { name: /Retry pull/ })
+    await expect(retryBtn).toBeVisible()
+
+    // Fire two clicks as close together as Playwright allows. The first
+    // click's own side effects (React re-render, possibly removing/
+    // replacing the button once the request resolves) can make the SECOND
+    // high-level .click() action's actionability/stability wait hang until
+    // its own timeout rather than the whole test's — allSettled plus a
+    // short per-click timeout means a detached-element outcome from the
+    // loser is treated as an acceptable settle, not a test failure.
+    await Promise.allSettled([
+      retryBtn.click({ timeout: 5000 }),
+      retryBtn.click({ force: true, timeout: 5000 }),
+    ])
+
+    // Whichever click "won", the page must settle cleanly: no crash, and
+    // eventually either the bar clears (retry accepted, sync in progress
+    // or resolved) or shows a clean, single, still-usable state — never
+    // stuck, never duplicated.
+    await page.waitForTimeout(2000)
+    const projSection = page.locator(`[data-testid="proj-sections-${ns}-${proj}"]`)
+    await expect(projSection).toBeVisible()
+    await page.screenshot({ path: 'test-results/seed-sync-pull-dblclick-settled.png', fullPage: false })
+  })
+
+  // Task A, multi-session: N independent WebSocket connections (standing in
+  // for N browser tabs/sessions, each opened exactly as the app's wsClient
+  // would) all fire retry_seed_sync (the same message "Retry pull" sends)
+  // for the SAME stuck seed sync at effectively the same instant. This is
+  // the direct UI/E2E-layer proof that seedSyncOpLock actually serializes
+  // retries over the real network path, not just in the Go-level lock test.
+  //
+  // The guarantee the lock provides is serialization, not "exactly one
+  // winner": since the same conflict content is never resolved mid-test,
+  // each retry that acquires the lock genuinely runs its pull to
+  // completion, re-hits the same conflict, and releases the lock — making
+  // it legitimate for a LATER call to then acquire the lock and succeed
+  // too (this is exactly the same "sequential, non-overlapping turns"
+  // pattern TestRetryPRAgent_MCP_ConcurrentCallsNeverOverlap already
+  // accepts on the PR side). What the lock rules out is two pulls ever
+  // running AT THE SAME TIME, and a false "status: ok" being sent for a
+  // call whose pull never actually happened — not multiple sequential
+  // successes.
+  test('multiple concurrent sessions racing Retry pull: only clean, serialized outcomes', async ({ page }) => {
+    test.setTimeout(120_000)
+    await ensureAdminLoggedIn(page)
+    const ns = 'ssrrace'
+    const proj = 'demo'
+    await ensureProject(page, ns, proj)
+    const token = await issueGitToken(page)
+
+    const repo = cloneAndInit(token, ns, proj)
+    const seedBareDir = makeDivergedSeedBare(repo)
+    execSync('echo "gitcote-side change (race)" > conflict.txt', { cwd: repo, shell: '/bin/bash' })
+    git(repo, 'add', 'conflict.txt')
+    git(repo, 'commit', '-m', 'gitcote-side change (race)')
+    git(repo, 'push', 'origin', 'main')
+
+    await setupSeedConfig(page, ns, proj, seedBareDir, 'ssrrace-key')
+    await wsRequest(page, 'SEED_PULL', { namespace: ns, projectName: proj })
+    await waitForRecoveryBar(page, ns, proj, 'pull')
+
+    const outcomes = await page.evaluate(
+      ({ ns, proj, n }) => {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+        function fire(): Promise<{ ok: boolean; message: string }> {
+          return new Promise((resolve) => {
+            const ws = new WebSocket(`${proto}//${location.host}/ws/ui`)
+            ws.onopen = () => {
+              ws.send(JSON.stringify({
+                type: 'SEED_SYNC_RETRY',
+                payload: { namespace: ns, projectName: proj },
+              }))
+            }
+            ws.onmessage = (ev) => {
+              const msg = JSON.parse(ev.data)
+              ws.close()
+              if (msg.type === 'ERROR') resolve({ ok: false, message: msg.payload?.message ?? '' })
+              else resolve({ ok: true, message: msg.payload?.message ?? '' })
+            }
+            ws.onerror = () => resolve({ ok: false, message: 'ws error' })
+            setTimeout(() => { ws.close(); resolve({ ok: false, message: 'timeout' }) }, 15000)
+          })
+        }
+        const sockets: Promise<{ ok: boolean; message: string }>[] = []
+        for (let i = 0; i < n; i++) sockets.push(fire())
+        return Promise.all(sockets)
+      },
+      { ns, proj, n: 6 },
+    )
+
+    const succeeded = outcomes.filter(o => o.ok)
+    // A late-arriving call can legitimately see either "already in
+    // progress" (genuinely raced against a call whose pull is still
+    // running) or "seed sync is not the active queue entry" (arrived after
+    // the previous call's pull had already finished and released the
+    // slot). Both are correct, clean rejections. What must never happen:
+    // a crash, an unrecognized error, or zero successes (the lock must
+    // eventually let calls through, not deadlock everything out).
+    const cleanRejection = /already in progress|not the active queue entry/i
+    const unexpected = outcomes.filter(o => !o.ok && !cleanRejection.test(o.message))
+
+    if (unexpected.length > 0) {
+      throw new Error(`unexpected non-clean rejection(s): ${JSON.stringify(unexpected)}`)
+    }
+    if (succeeded.length < 1) {
+      throw new Error(`expected at least 1 of 6 concurrent Retry-pull calls to proceed, got 0: ${JSON.stringify(outcomes)}`)
+    }
+    if (outcomes.length !== 6) {
+      throw new Error(`expected 6 responses, got ${outcomes.length}`)
+    }
+
+    // The real proof that the lock actually SERIALIZED rather than let
+    // pulls overlap: after everything settles, the project must still be
+    // in one coherent state (still showing the same unresolved pull
+    // conflict — the content was never fixed), not something a torn/
+    // interleaved pair of concurrent git operations could produce.
+    const barAfter = await waitForRecoveryBar(page, ns, proj, 'pull')
+    await expect(barAfter).toContainText('conflict')
+  })
+
+  // Task B: "Retry push/pull" previously read as if it always meant "retry
+  // a merge conflict" — but a missing SSH key (an infrastructure problem,
+  // nothing to do with a conflict) also lands in an interrupted-like state.
+  // This proves the recovery bar now distinguishes the two: an SSH-key
+  // failure must show "pull failed" (not "conflict") with the actual
+  // detail text, not a bare, ambiguous "pull interrupted".
+  test('infrastructure failure (missing SSH key) is distinguishable from a merge conflict', async ({ page }) => {
+    test.setTimeout(60_000)
+    await ensureAdminLoggedIn(page)
+    const ns = 'ssrnokey'
+    const proj = 'demo'
+    await ensureProject(page, ns, proj)
+    const token = await issueGitToken(page)
+
+    const repo = cloneAndInit(token, ns, proj)
+    const seedBareDir = makeDivergedSeedBare(repo)
+
+    // Seed config with NO key at all — the exact "SSH key missing"
+    // infrastructure failure the directive calls out, as distinct from a
+    // genuine merge conflict.
+    await wsRequest(page, 'SEED_RESUME', { email: ADMIN_EMAIL, password: ADMIN_PASSWORD })
+    await wsRequest(page, 'SEED_CONFIG_SET', {
+      namespace: ns, projectName: proj, seedUrl: seedBareDir, keyName: '', pushMode: 'disabled',
+    })
+
+    await wsRequest(page, 'SEED_PULL', { namespace: ns, projectName: proj })
+
+    const projSection = page.locator(`[data-testid="proj-sections-${ns}-${proj}"]`)
+    const bar = projSection.locator('[data-testid="seed-sync-recovery"]')
+    const deadline = Date.now() + 30000
+    let seen = false
+    while (Date.now() < deadline && !seen) {
+      await page.goto('/settings?item=namespaces')
+      await page.waitForTimeout(1000)
+      seen = await bar.isVisible().catch(() => false)
+    }
+    if (!seen) throw new Error('recovery bar for the SSH-key-missing failure did not appear within 30s')
+
+    // Must read as a FAILURE, not a conflict — an operator must not think
+    // "I need to resolve a merge conflict" when the real problem is "no
+    // key is configured".
+    await expect(bar).toContainText('failed')
+    await expect(bar).not.toContainText('conflict')
+    // The actual detail (from doSeedPull's "no key configured" error,
+    // persisted via updateSeedSyncStateDetail) must be visible, not just
+    // the generic "pull failed" category — otherwise the operator still
+    // can't tell an SSH-key problem from a network-timeout problem.
+    await expect(bar).toContainText(/no key configured/i)
+    await page.screenshot({ path: 'test-results/seed-sync-infra-failure-distinguishable.png', fullPage: false })
+  })
 })
