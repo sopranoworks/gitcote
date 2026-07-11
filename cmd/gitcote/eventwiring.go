@@ -1233,7 +1233,15 @@ func reconcileExternalSeedSync(store *git.Store, ec *eventContext, ns, proj stri
 	if err != nil || cfg.SyncStatus == nil {
 		return
 	}
-	if cfg.SyncStatus.State != "interrupted" && cfg.SyncStatus.State != "conflict" {
+	// git.SeedStateError ("error") is doSeedPush's own interior write
+	// (seedwiring.go), always overwritten by the caller's
+	// updateSeedSyncStateDetail immediately afterward in the normal case —
+	// but a crash in that exact window can leave it as the last-persisted
+	// value, and it isn't recognized by the interrupted/conflict check
+	// below unless included here too. Safe to include unconditionally: the
+	// ancestry check further down is what actually gates any state change,
+	// this only widens which stale values are worth checking against it.
+	if cfg.SyncStatus.State != "interrupted" && cfg.SyncStatus.State != "conflict" && cfg.SyncStatus.State != git.SeedStateError {
 		return
 	}
 

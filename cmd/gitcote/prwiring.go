@@ -306,7 +306,13 @@ func invalidateApprovalsForPush(store *git.Store, logger *slog.Logger, namespace
 
 // reconcileExternalMerges detects PRs whose source branch has been merged into
 // the target branch outside of GitCote's merge flow (e.g. operator pushed
-// manually). Transitions such PRs to StateMerged and releases their queue slot.
+// manually, or GitCote itself crashed after writing the merge ref but before
+// recording StateMerged — handlePRMerge/autoMergePR/reattemptMerge all write
+// the git merge ref before the PR's own StateMerged write, so a crash in
+// between leaves a PR that looks StateApproved/StateMergeConflict even
+// though the merge already landed; the ancestry check below is agnostic to
+// which of these produced the mismatch). Transitions such PRs to StateMerged
+// and releases their queue slot.
 func reconcileExternalMerges(store *git.Store, ec *eventContext, namespace, project string, logger *slog.Logger) {
 	if ec == nil || ec.integrityHS == nil {
 		return
@@ -323,7 +329,7 @@ func reconcileExternalMerges(store *git.Store, ec *eventContext, namespace, proj
 	prs, _ := prStore.List("")
 	for i := range prs {
 		p := &prs[i]
-		if p.State != pr.StateInterrupted && p.State != pr.StateMergeConflict {
+		if p.State != pr.StateInterrupted && p.State != pr.StateMergeConflict && p.State != pr.StateApproved {
 			continue
 		}
 

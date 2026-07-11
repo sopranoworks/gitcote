@@ -244,6 +244,10 @@ func run(cfg *Config, logger *slog.Logger) error {
 	// stale AgentTokenRecord that would otherwise permanently block Retry
 	// for the affected PR/seed sync (see reconcileOrphanedAgents).
 	reconcileOrphanedAgents(evtCtx, logger)
+	// ---- Reconcile git-vs-bookkeeping and queue-membership mismatches a
+	// crash could have left mid-write, across every project (see
+	// reconcileExternalStateAtStartup) ----
+	reconcileExternalStateAtStartup(gitStore, evtCtx, logger)
 
 	// ---- Smart HTTP handler (/<ns>/<proj>.git/...) — pure Go via go-git v6 ----
 	gitHTTP := git.NewHandler(gitStore, logger)
