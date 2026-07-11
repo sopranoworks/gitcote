@@ -779,6 +779,16 @@ func TestReviewIncomplete_RetryViaMCP(t *testing.T) {
 	create2StagePR(t, prStore, ns, proj, 2, "feat-queued")
 	hs.EnqueuePR(ns, proj, 2)
 
+	// The PR only reached review_incomplete because a reviewer was
+	// enabled and ran in the first place — reflect that in config so
+	// retry_pr_agent's (no-override) resolved-config check passes.
+	enabled := true
+	if err := hs.SetGlobalPREventSettings(&integrity.PREventSettings{
+		OnCreated: &integrity.EventAction{AgentEnabled: &enabled, AgentName: "default_claude_reviewer"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	// Simulate review_incomplete interrupt (slot retained)
 	markInterrupted(prStore, pr1, "review_incomplete",
 		"agent exited successfully but did not approve or reject",

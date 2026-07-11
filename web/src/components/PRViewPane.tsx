@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useRouterState } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Markdown } from '@shoka/web-core'
-import { prGet, prMerge, prRetryAgent, prDismissInterrupt, prOperatorReject, prClose, prReview, type ConflictInfo } from '../ops/prOps'
+import { prGet, prMerge, prRetryAgent, prDismissInterrupt, prOperatorReject, prClose, type ConflictInfo } from '../ops/prOps'
 import { prEventSettingsGet } from '../ops/eventSettingsOps'
 import { serverSshInfo } from '../ops/userSshKeyOps'
 import { PRStatusBadge } from './PRStatusBadge'
@@ -106,12 +106,19 @@ function RetryPanel({
   const [switchAgent, setSwitchAgent] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
   async function handleRetry(agentName?: string) {
     setBusy(true)
+    setError('')
     try {
       await prRetryAgent(namespace, project, number, agentName)
       onRefresh()
+    } catch (err) {
+      // Most commonly: no agent is currently configured/enabled for this
+      // project — the backend no longer silently falls back to a builtin
+      // agent, so this is surfaced instead of nothing visibly happening.
+      setError(err instanceof Error ? err.message : 'retry failed')
     } finally {
       setBusy(false)
     }
@@ -166,6 +173,7 @@ function RetryPanel({
           </>
         )}
       </div>
+      {error && <div className={styles.retryError}>{error}</div>}
     </div>
   )
 }
@@ -177,7 +185,6 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
   const [rejectReason, setRejectReason] = useState('')
   const [rejectModalOpen, setRejectModalOpen] = useState(false)
   const [closing, setClosing] = useState(false)
-  const [reviewing, setReviewing] = useState(false)
 
   const { data, refetch } = useQuery({
     queryKey: ['pr-detail', namespace, project, number],
@@ -205,28 +212,9 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
       ? projectSettings.on_confirmed.auto_confirm
       : globalSettings?.on_confirmed?.auto_confirm) ?? false
 
-  const hasReviewer = (() => {
-    const projCreated = projectSettings?.on_created
-    const globalCreated = globalSettings?.on_created
-    const agentEnabled = projCreated?.agent_enabled !== undefined
-      ? projCreated.agent_enabled
-      : globalCreated?.agent_enabled
-    return agentEnabled ?? false
-  })()
-
   function handleRefresh() {
     void refetch()
     void queryClient.invalidateQueries({ queryKey: ['pr-list', namespace, project] })
-  }
-
-  async function handleReview() {
-    setReviewing(true)
-    try {
-      await prReview(namespace, project, number)
-      handleRefresh()
-    } finally {
-      setReviewing(false)
-    }
   }
 
   async function handleMerge() {
@@ -302,11 +290,6 @@ function PRDetail({ namespace, project, number }: { namespace: string; project: 
       {pr.state === 'open' && (
         <div className={styles.section}>
           <div className={styles.actions}>
-            {hasReviewer && data.retry_eligible && (
-              <button className={styles.reviewBtn} disabled={reviewing} onClick={() => void handleReview()}>
-                {reviewing ? 'Reviewing…' : 'Review'}
-              </button>
-            )}
             <button
               className={styles.rejectBtn}
               onClick={() => setRejectModalOpen(true)}

@@ -112,6 +112,16 @@ func TestRetryPRAgent_MCP_RejectedWhileAnotherInProgress(t *testing.T) {
 	disabled := false
 	ec.agentCfg = AgentSpawnConfig{Enabled: &disabled}
 
+	// A reviewer must be configured, or every call would be rejected as
+	// "no agent configured" rather than exercising the in-flight lock
+	// rejection this test is actually about.
+	enabled := true
+	if err := hs.SetGlobalPREventSettings(&integrity.PREventSettings{
+		OnCreated: &integrity.EventAction{AgentEnabled: &enabled},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	createTestPR(t, prStore, ns, proj, 1, "feat/inflight")
 	isActive, err := hs.EnqueuePR(ns, proj, 1)
 	if err != nil {
@@ -201,6 +211,16 @@ func TestRetryPRAgent_MCP_ConcurrentCallsNeverOverlap(t *testing.T) {
 
 	disabled := false
 	ec.agentCfg = AgentSpawnConfig{Enabled: &disabled}
+
+	// A reviewer must be configured, or every call would be rejected as
+	// "no agent configured" rather than exercising the reentrancy lock
+	// this test is actually about.
+	enabled := true
+	if err := hs.SetGlobalPREventSettings(&integrity.PREventSettings{
+		OnCreated: &integrity.EventAction{AgentEnabled: &enabled},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	createTestPR(t, prStore, ns, proj, 1, "feat/race")
 	isActive, err := hs.EnqueuePR(ns, proj, 1)

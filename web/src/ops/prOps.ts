@@ -116,10 +116,3 @@ export function prClose(
   return wsClient().request('PR_CLOSE', { namespace, projectName, number })
 }
 
-export function prReview(
-  namespace: string,
-  projectName: string,
-  number: number,
-): Promise<{ number: number; message: string }> {
-  return wsClient().request('PR_REVIEW', { namespace, projectName, number })
-}

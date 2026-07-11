@@ -146,7 +146,12 @@ async function waitForPRTitle(page: Page, ns: string, proj: string, prNum: numbe
   throw new Error(`PR #${prNum} ("${title}") did not appear within ${timeout}ms`)
 }
 
-test.describe('Review button race safety (guarded by prRetryEligible)', () => {
+// The separate "Review" button/PR_REVIEW mechanism was retired — Retry and
+// Review are now a single unified action (retry_pr_agent / "Start review"
+// or "Retry" depending on state), gated by the same prRetryEligible check.
+// These specs keep the "race safety" focus (queue-order + configured-vs-not)
+// against that unified button.
+test.describe('Unified retry/review button race safety (guarded by prRetryEligible)', () => {
   let token = ''
 
   test.beforeAll(async ({ browser }) => {
@@ -162,7 +167,7 @@ test.describe('Review button race safety (guarded by prRetryEligible)', () => {
     await ensureAdminLoggedIn(page)
   })
 
-  test('Review button appears for an eligible open PR once a reviewer agent is configured', async ({ page }) => {
+  test('Start review button appears for an eligible open PR once a reviewer agent is configured', async ({ page }) => {
     test.setTimeout(60_000)
     const content = page.locator('#content')
 
@@ -176,13 +181,13 @@ test.describe('Review button race safety (guarded by prRetryEligible)', () => {
     })
 
     // PR #1 is open and the active queue entry, so with a reviewer now
-    // configured, the Review button must be visible — proves the
-    // hasReviewer && retry_eligible gate isn't just always-false.
+    // configured, the unified Start review button must be visible —
+    // proves the retry_eligible gate isn't just always-false.
     await page.goto('/p/rgv/demo/prs?pr=1')
     await page.waitForTimeout(1500)
     await expect(content.getByText('Active PR')).toBeVisible({ timeout: 5000 })
     await expect(content.locator('[data-state="open"]')).toBeVisible()
-    await expect(content.getByRole('button', { name: 'Review', exact: true })).toBeVisible({ timeout: 5000 })
+    await expect(content.getByRole('button', { name: 'Start review', exact: true })).toBeVisible({ timeout: 5000 })
     await page.screenshot({ path: 'test-results/race-review-visible-active.png', fullPage: false })
   })
 
@@ -196,7 +201,7 @@ test.describe('Review button race safety (guarded by prRetryEligible)', () => {
   // pushed ref instead of guessing, two simultaneously-open PRs on distinct
   // branches resolve correctly, and this test exercises that end-to-end
   // through a real two-PR push sequence, not just a single PR.
-  test('Review button does NOT appear for a queued PR even when a reviewer agent is configured (no queue-jumping)', async ({ page }) => {
+  test('Start review button does NOT appear for a queued PR even when a reviewer agent is configured (no queue-jumping)', async ({ page }) => {
     test.setTimeout(120_000)
     const content = page.locator('#content')
 
@@ -208,32 +213,31 @@ test.describe('Review button race safety (guarded by prRetryEligible)', () => {
     pushPR(repo, 'feat/queued', 'Queued PR')
     await waitForPRTitle(page, 'rgv2', 'demo', 2, 'Queued PR')
 
-    // Configure a reviewer agent after both PRs already exist — this only
-    // affects the frontend's hasReviewer flag; it does not retroactively
-    // spawn anything for either existing PR.
+    // Configure a reviewer agent after both PRs already exist — this does
+    // not retroactively spawn anything for either existing PR.
     await setPREventSettings(page, 'rgv2', 'demo', {
       on_created: { agent_enabled: true, agent_name: 'mock_reviewer' },
       on_confirmed: { auto_confirm: false },
     })
 
     // Positive control: PR #1 is open and the active queue entry, so the
-    // Review button must be visible — proves the gate isn't always-false.
+    // Start review button must be visible — proves the gate isn't
+    // always-false.
     await page.goto('/p/rgv2/demo/prs?pr=1')
     await page.waitForTimeout(1500)
     await expect(content.getByText('Active PR')).toBeVisible({ timeout: 5000 })
     await expect(content.locator('[data-state="open"]')).toBeVisible()
-    await expect(content.getByRole('button', { name: 'Review', exact: true })).toBeVisible({ timeout: 5000 })
+    await expect(content.getByRole('button', { name: 'Start review', exact: true })).toBeVisible({ timeout: 5000 })
     await page.screenshot({ path: 'test-results/race-review-visible-active-two-pr.png', fullPage: false })
 
-    // PR #2 is open too, and a reviewer IS configured (hasReviewer=true),
-    // but it is NOT the active queue entry — the Review button must not
-    // appear, or an operator could spawn a reviewer for it out of FIFO
-    // order.
+    // PR #2 is open too, and a reviewer IS configured, but it is NOT the
+    // active queue entry — the Start review button must not appear, or
+    // an operator could spawn a reviewer for it out of FIFO order.
     await page.goto('/p/rgv2/demo/prs?pr=2')
     await page.waitForTimeout(1500)
     await expect(content.getByText('Queued PR')).toBeVisible({ timeout: 5000 })
     await expect(content.locator('[data-state="open"]')).toBeVisible()
-    await expect(content.getByRole('button', { name: 'Review', exact: true })).not.toBeVisible()
+    await expect(content.getByRole('button', { name: 'Start review', exact: true })).not.toBeVisible()
     await expect(content.locator('[data-testid="retry-eligible-panel"]')).not.toBeVisible()
     await page.screenshot({ path: 'test-results/race-review-hidden-queued.png', fullPage: false })
   })

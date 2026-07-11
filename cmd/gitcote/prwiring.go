@@ -749,7 +749,7 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "retry_pr_agent",
-		Description: "Re-spawn a reviewer/coder/merger agent for a PR. Works on StateInterrupted PRs (clears interrupted state, restores previous status, then re-spawns) and on StateOpen PRs that never had an agent spawned — e.g. no reviewer agent was configured when the PR arrived. Admin only.",
+		Description: "Spawn/re-spawn a reviewer/coder/merger agent for a PR, using whichever agent config is currently resolved for the project — never overrides an explicit AgentEnabled=false. Works on StateInterrupted PRs (clears interrupted state, restores previous status, then re-spawns) and on StateOpen PRs that never had an agent spawned — e.g. no reviewer agent was configured when the PR arrived. This is the single unified action for both cases (formerly also exposed separately as PR_REVIEW/\"Review\"). Admin only.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in retryPRAgentInput) (*mcp.CallToolResult, retryPRAgentOutput, error) {
 		principal, hasPrincipal := auth.PrincipalFrom(ctx)
 		if hasPrincipal {
@@ -778,19 +778,6 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 
 		interruptInfo := p.InterruptInfo
 		previousState := p.PreviousState
-
-		ensureNoActiveToken(ec, in.Namespace, in.ProjectName, int(in.Number))
-
-		if p.State == pr.StateInterrupted {
-			p.State = previousState
-			p.PreviousState = ""
-			p.InterruptInfo = nil
-			p.UpdatedAt = time.Now()
-			if err := prStore.Update(p); err != nil {
-				releasePRAgentLock(lockKey)
-				return nil, retryPRAgentOutput{}, err
-			}
-		}
 
 		role := ""
 		if interruptInfo != nil {
@@ -832,14 +819,46 @@ func registerPRTools(mcpServer *mcp.Server, gitStore *git.Store, sc *seedContext
 		if interruptInfo != nil && interruptInfo.AgentName != "" {
 			action.AgentName = interruptInfo.AgentName
 		}
-		action.AgentEnabled = true
+
+		// Respect whatever is currently configured — never force an agent
+		// to run against an explicit AgentEnabled=false. This used to be
+		// forced unconditionally, which was harmless in this tool's
+		// original StateInterrupted-only scope (an agent had necessarily
+		// already been enabled to reach that state) but became a real
+		// override of operator intent once eligibility was extended to
+		// never-attempted StateOpen PRs, where AgentEnabled reflects the
+		// project's actual current configuration, not history. Checked
+		// before mutating any PR state, so a rejected call has no
+		// side effects.
+		if !action.AgentEnabled {
+			releasePRAgentLock(lockKey)
+			return nil, retryPRAgentOutput{}, fmt.Errorf("no %s agent configured for %s/%s — enable one in project or global event settings first", role, in.Namespace, in.ProjectName)
+		}
+
+		ensureNoActiveToken(ec, in.Namespace, in.ProjectName, int(in.Number))
+
+		if p.State == pr.StateInterrupted {
+			p.State = previousState
+			p.PreviousState = ""
+			p.InterruptInfo = nil
+			p.UpdatedAt = time.Now()
+			if err := prStore.Update(p); err != nil {
+				releasePRAgentLock(lockKey)
+				return nil, retryPRAgentOutput{}, err
+			}
+		}
+
+		message := "agent spawned"
+		if interruptInfo != nil {
+			message = "agent re-spawned"
+		}
 
 		go func() {
 			defer releasePRAgentLock(lockKey)
 			spawnAgentForPR(ec, action, p, role)
 		}()
 
-		return nil, retryPRAgentOutput{Number: p.Number, State: string(p.State), Message: "agent re-spawned"}, nil
+		return nil, retryPRAgentOutput{Number: p.Number, State: string(p.State), Message: message}, nil
 	})
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
@@ -1010,7 +1029,6 @@ const (
 	MsgPROperatorReject  uiws.MessageType = "PR_OPERATOR_REJECT"
 	MsgAgentList         uiws.MessageType = "AGENT_LIST"
 	MsgPRQueueGet        uiws.MessageType = "PR_QUEUE_GET"
-	MsgPRReview          uiws.MessageType = "PR_REVIEW"
 )
 
 var PRLevels = map[uiws.MessageType]uiws.Op{
@@ -1024,7 +1042,6 @@ var PRLevels = map[uiws.MessageType]uiws.Op{
 	MsgPROperatorReject:   {Level: authz.LevelAdmin, Global: false},
 	MsgAgentList:          {Level: authz.LevelRead, Global: true},
 	MsgPRQueueGet:         {Level: authz.LevelRead, Global: false},
-	MsgPRReview:           {Level: authz.LevelAdmin, Global: false},
 }
 
 func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType uiws.MessageType, payload json.RawMessage) bool {
@@ -1049,8 +1066,6 @@ func prDispatch(c *uiws.Client, gitStore *git.Store, ec *eventContext, msgType u
 		handleAgentList(c, ec)
 	case MsgPRQueueGet:
 		handlePRQueueGet(c, ec, payload)
-	case MsgPRReview:
-		handlePRReview(c, gitStore, ec, payload)
 	default:
 		return false
 	}
@@ -1430,20 +1445,6 @@ func handlePRRetryAgent(c *uiws.Client, gitStore *git.Store, ec *eventContext, p
 	interruptInfo := pullReq.InterruptInfo
 	previousState := pullReq.PreviousState
 
-	ensureNoActiveToken(ec, p.Namespace, p.ProjectName, int(p.Number))
-
-	if pullReq.State == pr.StateInterrupted {
-		pullReq.State = previousState
-		pullReq.PreviousState = ""
-		pullReq.InterruptInfo = nil
-		pullReq.UpdatedAt = time.Now()
-		if err := prStore.Update(pullReq); err != nil {
-			releasePRAgentLock(lockKey)
-			c.SendError(err.Error())
-			return
-		}
-	}
-
 	role := ""
 	if interruptInfo != nil {
 		role = interruptInfo.AgentRole
@@ -1486,7 +1487,35 @@ func handlePRRetryAgent(c *uiws.Client, gitStore *git.Store, ec *eventContext, p
 	} else if interruptInfo != nil && interruptInfo.AgentName != "" {
 		action.AgentName = interruptInfo.AgentName
 	}
-	action.AgentEnabled = true
+	// Respect whatever is currently configured — never force an agent to
+	// run against an explicit AgentEnabled=false (see the matching
+	// comment in the retry_pr_agent MCP tool for why this was previously
+	// forced and why that stopped being safe). Checked before mutating any
+	// PR state, so a rejected call has no side effects.
+	if !action.AgentEnabled {
+		releasePRAgentLock(lockKey)
+		c.SendError(fmt.Sprintf("no %s agent configured for %s/%s — enable one in project or global event settings first", role, p.Namespace, p.ProjectName))
+		return
+	}
+
+	ensureNoActiveToken(ec, p.Namespace, p.ProjectName, int(p.Number))
+
+	if pullReq.State == pr.StateInterrupted {
+		pullReq.State = previousState
+		pullReq.PreviousState = ""
+		pullReq.InterruptInfo = nil
+		pullReq.UpdatedAt = time.Now()
+		if err := prStore.Update(pullReq); err != nil {
+			releasePRAgentLock(lockKey)
+			c.SendError(err.Error())
+			return
+		}
+	}
+
+	message := "agent spawned"
+	if interruptInfo != nil {
+		message = "agent re-spawned"
+	}
 
 	go func() {
 		defer releasePRAgentLock(lockKey)
@@ -1496,7 +1525,7 @@ func handlePRRetryAgent(c *uiws.Client, gitStore *git.Store, ec *eventContext, p
 	c.SendResponse(MsgPRRetryAgent, map[string]interface{}{
 		"number":  pullReq.Number,
 		"state":   string(pullReq.State),
-		"message": "agent re-spawned",
+		"message": message,
 	})
 }
 
@@ -1676,61 +1705,5 @@ func handleAgentList(c *uiws.Client, ec *eventContext) {
 		})
 	}
 	c.SendResponse(MsgAgentList, map[string]interface{}{"agents": agents})
-}
-
-// --- PR_REVIEW ---
-
-type prReviewPayload struct {
-	Namespace   string `json:"namespace"`
-	ProjectName string `json:"projectName"`
-	Number      uint32 `json:"number"`
-}
-
-func handlePRReview(c *uiws.Client, gitStore *git.Store, ec *eventContext, payload json.RawMessage) {
-	var p prReviewPayload
-	if err := json.Unmarshal(payload, &p); err != nil {
-		c.SendError("invalid payload")
-		return
-	}
-
-	prStore, err := getPRStore(gitStore.BaseDir(), p.Namespace, p.ProjectName)
-	if err != nil {
-		c.SendError(err.Error())
-		return
-	}
-	prObj, err := prStore.Get(p.Number)
-	if err != nil {
-		c.SendError(fmt.Sprintf("PR #%d not found", p.Number))
-		return
-	}
-	if prObj.State != pr.StateOpen {
-		c.SendError(fmt.Sprintf("PR #%d is not open (state: %s)", p.Number, prObj.State))
-		return
-	}
-
-	// Reuses prRetryEligible's queue/token checks (the interrupted-state
-	// branch is unreachable here since state is already confirmed Open
-	// above) — Review must not be allowed to jump the FIFO queue or
-	// double-spawn over an agent that's already running, same as Retry.
-	lockKey := agentTokenKey(p.Namespace, p.ProjectName, int(p.Number))
-	if !acquirePRAgentLock(lockKey) {
-		c.SendError(fmt.Sprintf("PR #%d: an agent operation is already in progress", p.Number))
-		return
-	}
-	if eligible, reason := prRetryEligible(ec, prObj); !eligible {
-		releasePRAgentLock(lockKey)
-		c.SendError(reason)
-		return
-	}
-
-	go func() {
-		defer releasePRAgentLock(lockKey)
-		onPRCreated(ec, prObj)
-	}()
-
-	c.SendResponse(MsgPRReview, map[string]interface{}{
-		"number":  prObj.Number,
-		"message": "review triggered",
-	})
 }
 

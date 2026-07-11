@@ -167,6 +167,9 @@ func TestRetryPRAgent_MCP_RetroactiveOnNeverAttemptedPR(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// No reviewer agent configured yet — retry_pr_agent must NOT fall back
+	// to a builtin agent. It should be rejected with a clear message, not
+	// silently spawn something the operator never asked for.
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "retry_pr_agent",
 		Arguments: map[string]any{
@@ -178,17 +181,48 @@ func TestRetryPRAgent_MCP_RetroactiveOnNeverAttemptedPR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry_pr_agent: %v", err)
 	}
+	if !result.IsError {
+		t.Fatalf("expected retry_pr_agent to be rejected with no agent configured, got success: %s", extractText(result))
+	}
+	if text := extractText(result); !strings.Contains(text, "no reviewer agent configured") {
+		t.Fatalf("expected a clear 'no agent configured' message, got: %s", text)
+	}
+	got, _ := prStore.Get(1)
+	if got.State != pr.StateOpen {
+		t.Fatalf("expected PR to remain open after the rejected call, got %q", got.State)
+	}
+	t.Log("PASS: retry_pr_agent does not fall back to a builtin agent when none is configured")
+
+	// Operator configures a reviewer agent — now the same action succeeds.
+	enabled := true
+	if err := hs.SetGlobalPREventSettings(&integrity.PREventSettings{
+		OnCreated: &integrity.EventAction{AgentEnabled: &enabled, AgentName: "mock_reviewer"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err = session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "retry_pr_agent",
+		Arguments: map[string]any{
+			"namespace":    ns,
+			"project_name": proj,
+			"number":       float64(1),
+		},
+	})
+	if err != nil {
+		t.Fatalf("retry_pr_agent: %v", err)
+	}
 	if result.IsError {
-		t.Fatalf("retry_pr_agent on never-attempted open PR should succeed once it's the active queue entry, got error: %s", extractText(result))
+		t.Fatalf("retry_pr_agent on never-attempted open PR should succeed once a reviewer is configured and it's the active queue entry, got error: %s", extractText(result))
 	}
 	text := extractText(result)
-	if !strings.Contains(text, "re-spawned") {
-		t.Fatalf("expected re-spawned confirmation, got: %s", text)
+	if !strings.Contains(text, "agent spawned") {
+		t.Fatalf("expected 'agent spawned' confirmation (never attempted before, not a re-spawn), got: %s", text)
 	}
 
 	// PR must remain open (this isn't an interrupted-PR restore — nothing
 	// to restore) and keep holding its queue slot.
-	got, _ := prStore.Get(1)
+	got, _ = prStore.Get(1)
 	if got.State != pr.StateOpen {
 		t.Fatalf("expected PR to remain open, got %q", got.State)
 	}
@@ -196,5 +230,5 @@ func TestRetryPRAgent_MCP_RetroactiveOnNeverAttemptedPR(t *testing.T) {
 	if q.ActivePR != 1 {
 		t.Fatalf("expected PR #1 to remain the active queue entry, got %d", q.ActivePR)
 	}
-	t.Log("PASS: retry_pr_agent retroactively triggers a reviewer for a PR that never had one, once it becomes eligible")
+	t.Log("PASS: retry_pr_agent retroactively triggers a reviewer for a PR that never had one, once a reviewer is actually configured")
 }
