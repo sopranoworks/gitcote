@@ -9,6 +9,9 @@ import {
   seedTest,
   seedPush,
   seedPull,
+  seedStatus,
+  seedSyncRetry,
+  seedSyncDismiss,
 } from '../ops/seedOps'
 import { SeedStatusBadge } from './SeedStatusBadge'
 import styles from './SeedConfigSection.module.css'
@@ -32,8 +35,76 @@ export function SeedConfigSection({
         {!isAdmin && <ManualPushButton namespace={namespace} project={project} />}
       </div>
       {isAdmin && (
-        <SeedConfigForm namespace={namespace} project={project} />
+        <>
+          <SeedSyncRecoveryBar namespace={namespace} project={project} />
+          <SeedConfigForm namespace={namespace} project={project} />
+        </>
       )}
+    </div>
+  )
+}
+
+// SeedSyncRecoveryBar is the operator-facing recovery surface for a stuck
+// seed sync (conflict or interrupted, pull or push) — the WebUI previously
+// had no entry point for retry_seed_sync/dismiss_seed_sync at all, only
+// MCP-tool access. Deliberately minimal: a status line naming the direction
+// (so the operator isn't misled about what they're retrying — pull and push
+// are different operations, see the c31e6b3 direction-dispatch fix) plus
+// Retry and Dismiss, wired directly to the existing tools.
+function SeedSyncRecoveryBar({
+  namespace,
+  project,
+}: {
+  namespace: string
+  project: string
+}) {
+  const qc = useQueryClient()
+  const { add: toast } = useToast()
+  const [busy, setBusy] = useState(false)
+
+  const { data } = useQuery({
+    queryKey: ['seed-status', namespace, project],
+    queryFn: () => seedStatus(namespace, project),
+    staleTime: 30_000,
+  })
+
+  const state = data?.syncStatus?.state
+  if (state !== 'conflict' && state !== 'interrupted') return null
+
+  const direction = data?.syncStatus?.direction === 'push' ? 'push' : 'pull'
+
+  async function run(action: () => Promise<{ message: string }>) {
+    setBusy(true)
+    try {
+      const result = await action()
+      toast({ level: 'warn', text: result.message })
+      void qc.invalidateQueries({ queryKey: ['seed-status', namespace, project] })
+    } catch (e) {
+      toast({ level: 'warn', text: e instanceof Error ? e.message : 'action failed' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={styles.recoveryBar} data-testid="seed-sync-recovery" data-direction={direction}>
+      <span className={styles.recoveryText}>
+        Seed sync {state} ({direction}){data?.syncStatus?.last_result ? `: ${data.syncStatus.last_result}` : ''}
+      </span>
+      <button
+        className={styles.btn}
+        disabled={busy}
+        onClick={() => void run(() => seedSyncRetry(namespace, project))}
+      >
+        {busy ? 'Working…' : `Retry ${direction}`}
+      </button>
+      <button
+        className={styles.btn}
+        disabled={busy}
+        onClick={() => void run(() => seedSyncDismiss(namespace, project))}
+      >
+        Dismiss
+      </button>
     </div>
   )
 }

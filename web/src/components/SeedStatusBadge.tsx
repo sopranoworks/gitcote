@@ -57,6 +57,31 @@ export function SeedStatusBadge({
           Error
         </span>
       )
+    case 'conflict': {
+      const dir = data.syncStatus?.direction === 'push' ? 'push' : 'pull'
+      return (
+        <span className={styles.badge} data-state="conflict" data-direction={dir} title={data.syncStatus?.last_result ?? ''}>
+          <span className={styles.dot} data-state="conflict" />
+          {dir === 'push' ? 'Push conflict' : 'Pull conflict'}
+        </span>
+      )
+    }
+    case 'interrupted': {
+      const dir = data.syncStatus?.direction === 'push' ? 'push' : 'pull'
+      return (
+        <span className={styles.badge} data-state="interrupted" data-direction={dir} title={data.syncStatus?.last_result ?? ''}>
+          <span className={styles.dot} data-state="interrupted" />
+          {dir === 'push' ? 'Push interrupted' : 'Pull interrupted'}
+        </span>
+      )
+    }
+    case 'retrying':
+      return (
+        <span className={styles.badge} data-state="retrying">
+          <span className={styles.dot} data-state="retrying" />
+          Retrying…
+        </span>
+      )
     default:
       return null
   }

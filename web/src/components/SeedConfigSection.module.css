@@ -75,3 +75,20 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.recoveryBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--c-bad, #f7768e);
+  background: color-mix(in srgb, var(--c-bad, #f7768e) 10%, transparent);
+}
+
+.recoveryText {
+  font-size: 0.82rem;
+  color: var(--c-text, #e6e9ef);
+}

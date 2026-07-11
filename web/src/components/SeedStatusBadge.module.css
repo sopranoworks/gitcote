@@ -29,3 +29,15 @@
 .dot[data-state='error'] {
   background: var(--c-bad, #f7768e);
 }
+
+.dot[data-state='conflict'] {
+  background: var(--c-bad, #f7768e);
+}
+
+.dot[data-state='interrupted'] {
+  background: var(--c-bad, #f7768e);
+}
+
+.dot[data-state='retrying'] {
+  background: var(--c-warn, #e3b341);
+}

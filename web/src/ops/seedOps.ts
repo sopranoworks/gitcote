@@ -2,6 +2,7 @@ import { wsClient } from '@shoka/web-core'
 
 export interface SeedSyncStatus {
   state: string
+  direction?: string
   last_push_at?: string
   last_result?: string
   paused_since?: string
@@ -121,4 +122,18 @@ export function seedStatus(
   projectName: string,
 ): Promise<SeedStatus> {
   return wsClient().request('SEED_STATUS', { namespace, projectName })
+}
+
+export function seedSyncRetry(
+  namespace: string,
+  projectName: string,
+): Promise<{ status: string; message: string }> {
+  return wsClient().request('SEED_SYNC_RETRY', { namespace, projectName })
+}
+
+export function seedSyncDismiss(
+  namespace: string,
+  projectName: string,
+): Promise<{ status: string; message: string }> {
+  return wsClient().request('SEED_SYNC_DISMISS', { namespace, projectName })
 }
