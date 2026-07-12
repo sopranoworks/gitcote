@@ -299,7 +299,7 @@ func execute(
 	defer cleanup()
 
 	// Copy environment files into the clone directory
-	if err := copyDirContents(envWorkDir, workDir); err != nil {
+	if err := agent.CopyDir(envWorkDir, workDir, nil); err != nil {
 		cleanupWorkdir()
 		return 1, fmt.Errorf("copy agent environment: %w", err)
 	}
@@ -427,27 +427,6 @@ func substituteVars(text string, vars map[string]string) string {
 		text = strings.ReplaceAll(text, k, v)
 	}
 	return text
-}
-
-func copyDirContents(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, path)
-		if rel == "." {
-			return nil
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, info.Mode())
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, info.Mode())
-	})
 }
 
 func randomSuffix() string {

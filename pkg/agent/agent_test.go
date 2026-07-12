@@ -162,6 +162,54 @@ func TestScanAgentConfigs_NonexistentConfigRoot(t *testing.T) {
 	}
 }
 
+func TestCopyDir_NilVarsCopiesVerbatim(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	os.WriteFile(filepath.Join(src, "file.txt"), []byte("hello $NAMESPACE"), 0o644)
+	os.MkdirAll(filepath.Join(src, "sub"), 0o755)
+	os.WriteFile(filepath.Join(src, "sub", "nested.txt"), []byte("world"), 0o644)
+
+	if err := CopyDir(src, dst, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dst, "file.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello $NAMESPACE" {
+		t.Errorf("file.txt = %q, want verbatim copy (no substitution)", string(data))
+	}
+
+	data, err = os.ReadFile(filepath.Join(dst, "sub", "nested.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "world" {
+		t.Errorf("sub/nested.txt = %q", string(data))
+	}
+}
+
+func TestCopyDir_WithVarsSubstitutes(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	os.WriteFile(filepath.Join(src, "file.txt"), []byte("hello $NAMESPACE"), 0o644)
+
+	if err := CopyDir(src, dst, map[string]string{"$NAMESPACE": "myns"}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dst, "file.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello myns" {
+		t.Errorf("file.txt = %q, want substituted", string(data))
+	}
+}
+
 func TestPrepareWorkDir(t *testing.T) {
 	envDir := t.TempDir()
 	os.WriteFile(filepath.Join(envDir, "CLAUDE.md"), []byte("NS: $NAMESPACE\nPR: $PR_ID\n"), 0o644)

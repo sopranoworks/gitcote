@@ -156,35 +156,6 @@ func TestSubstituteVars(t *testing.T) {
 	}
 }
 
-func TestCopyDirContents(t *testing.T) {
-	src := t.TempDir()
-	dst := t.TempDir()
-
-	os.WriteFile(filepath.Join(src, "file.txt"), []byte("hello"), 0o644)
-	os.MkdirAll(filepath.Join(src, "sub"), 0o755)
-	os.WriteFile(filepath.Join(src, "sub", "nested.txt"), []byte("world"), 0o644)
-
-	if err := copyDirContents(src, dst); err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(dst, "file.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "hello" {
-		t.Errorf("file.txt = %q", string(data))
-	}
-
-	data, err = os.ReadFile(filepath.Join(dst, "sub", "nested.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "world" {
-		t.Errorf("sub/nested.txt = %q", string(data))
-	}
-}
-
 func TestRun_Version(t *testing.T) {
 	var out strings.Builder
 	var errOut strings.Builder

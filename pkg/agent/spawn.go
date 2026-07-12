@@ -62,7 +62,7 @@ func PrepareWorkDir(config *AgentConfig, ctx *SpawnContext) (workDir string, cle
 			}
 		}
 	} else if config.EnvDir != "" {
-		if err := copyDirWithSubstitution(config.EnvDir, workDir, vars); err != nil {
+		if err := CopyDir(config.EnvDir, workDir, vars); err != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("copy environment_default: %w", err)
 		}
@@ -230,7 +230,13 @@ func substituteVars(text string, vars map[string]string) string {
 	return text
 }
 
-func copyDirWithSubstitution(src, dst string, vars map[string]string) error {
+// CopyDir recursively copies src into dst, applying variable substitution
+// (via substituteVars) to non-binary file contents. Pass a nil/empty vars
+// map to copy files verbatim. Exported for reuse by external importers of
+// this package (e.g. dovefeeder, or any future Rohrpost-style dispatcher)
+// that need to merge a prepared agent environment into an existing working
+// directory — the same operation PrepareWorkDir uses internally.
+func CopyDir(src, dst string, vars map[string]string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
